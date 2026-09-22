@@ -12,31 +12,50 @@
   var PLUGIN_TITLE = 'AnimeJoy';
   var DEFAULT_DOMAIN = 'https://animejoya.ru';
 
+  // безопасный доступ к хранилищу (совместимость со старыми сборками Lampa)
+  function storageGet(key, def) {
+    try {
+      if (Lampa.Storage && typeof Lampa.Storage.get === 'function') return Lampa.Storage.get(key, def);
+    } catch (e) {}
+    try {
+      var v = localStorage.getItem(key);
+      return v === null ? def : v;
+    } catch (e) {}
+    return def;
+  }
+
+  function storageSet(key, val) {
+    try {
+      if (Lampa.Storage && typeof Lampa.Storage.set === 'function') { Lampa.Storage.set(key, val); return; }
+    } catch (e) {}
+    try { localStorage.setItem(key, String(val)); } catch (e) {}
+  }
+
   /* ============================ НАСТРОЙКИ ============================ */
 
   function domain() {
-    var d = (Lampa.Storage.get('animejoy_domain') || DEFAULT_DOMAIN).trim();
+    var d = (storageGet('animejoy_domain') || DEFAULT_DOMAIN).trim();
     d = d.replace(/\/+$/, '');
     if (!/^https?:\/\//i.test(d)) d = 'https://' + d;
     return d;
   }
 
-  function loginVal() { return (Lampa.Storage.get('animejoy_login') || '').trim(); }
-  function passVal()  { return (Lampa.Storage.get('animejoy_password') || '').trim(); }
+  function loginVal() { return (storageGet('animejoy_login') || '').trim(); }
+  function passVal()  { return (storageGet('animejoy_password') || '').trim(); }
 
   function playerPriority() {
-    var p = Lampa.Storage.get('animejoy_player', 'cda');
+    var p = storageGet('animejoy_player', 'cda');
     var all = [p, 'cda', 'allvideo', 'sibnet'];
     return all.filter(function (v, i) { return all.indexOf(v) === i; });
   }
 
   function qualityPref() {
-    return Lampa.Storage.get('animejoy_quality', '1080p');
+    return storageGet('animejoy_quality', '1080p');
   }
 
   /* ============================ СЕТЬ ============================ */
 
-  function proxyPrefix() { return (Lampa.Storage.get('animejoy_proxy') || '').trim(); }
+  function proxyPrefix() { return (storageGet('animejoy_proxy') || '').trim(); }
 
   function wrapUrl(url) {
     var p = proxyPrefix();
