@@ -147,6 +147,7 @@
       var id = m[2];
       var text = m[3].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       if (!text || seen[id]) continue;
+      if (/\/news\//.test(url)) continue; // новости — не тайтлы
       seen[id] = true;
       results.push({ id: id, url: url, title: text });
     }
