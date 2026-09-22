@@ -18,10 +18,11 @@
 ## Установка
 
 1. В Lampa: **Настройки → Расширения → Добавить плагин**
-2. Укажите URL файла `animejoy.js` из этого репозитория (raw-ссылка):
+2. Укажите URL плагина:
    ```
-   https://raw.githubusercontent.com/naggets/animejoy-plugin/main/animejoy.js
+   https://naggets.github.io/animejoy-plugin/animejoy.js
    ```
+   (альтернатива — raw-ссылка: `https://raw.githubusercontent.com/naggets/animejoy-plugin/main/animejoy.js`)
 3. Зайдите в **Настройки → AnimeJoy** и заполните:
    - **Домен / зеркало** — актуальное зеркало (по умолчанию `https://animejoya.ru`)
    - **Логин / Пароль** — учётная запись animejoya.ru (требуется: поиск и страницы тайтлов закрыты для гостей)

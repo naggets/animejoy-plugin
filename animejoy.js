@@ -659,21 +659,21 @@
 
     Lampa.SettingsApi.addParam({
       component: 'animejoy',
-      param: { name: 'animejoy_domain', type: 'input', default: DEFAULT_DOMAIN, placeholder: DEFAULT_DOMAIN },
+      param: { name: 'animejoy_domain', type: 'input', values: '', default: DEFAULT_DOMAIN, placeholder: DEFAULT_DOMAIN },
       field: { name: 'Домен / зеркало', description: 'Актуальное зеркало AnimeJoy, например ' + DEFAULT_DOMAIN },
       onChange: resetAuth
     });
 
     Lampa.SettingsApi.addParam({
       component: 'animejoy',
-      param: { name: 'animejoy_login', type: 'input', default: '', placeholder: 'Логин' },
+      param: { name: 'animejoy_login', type: 'input', values: '', default: '', placeholder: 'Логин' },
       field: { name: 'Логин', description: 'Логин от animejoya.ru' },
       onChange: resetAuth
     });
 
     Lampa.SettingsApi.addParam({
       component: 'animejoy',
-      param: { name: 'animejoy_password', type: 'input', default: '', placeholder: 'Пароль' },
+      param: { name: 'animejoy_password', type: 'input', values: '', default: '', placeholder: 'Пароль' },
       field: { name: 'Пароль', description: 'Пароль от animejoya.ru' },
       onChange: resetAuth
     });
