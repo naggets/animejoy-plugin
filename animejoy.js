@@ -10,7 +10,7 @@
   window.animejoy_plugin_loaded = true;
 
   var PLUGIN_TITLE = 'AnimeJoy';
-  var PLUGIN_VERSION = '1.9.0';
+  var PLUGIN_VERSION = '1.10.0';
   var DEFAULT_DOMAIN = 'https://animejoya.ru';
 
   // безопасный доступ к хранилищу (совместимость со старыми сборками Lampa)
@@ -114,8 +114,8 @@
   function passVal()  { return (storageGet('animejoy_password') || '').trim(); }
 
   function playerPriority() {
-    var p = storageGet('animejoy_player', 'cda');
-    var all = [p, 'cda', 'animejoy', 'allvideo', 'kodik', 'mail', 'sibnet'];
+    var p = storageGet('animejoy_player', 'animejoy');
+    var all = [p, 'animejoy', 'allvideo', 'kodik', 'sibnet', 'mail', 'cda'];
     return all.filter(function (v, i) { return all.indexOf(v) === i; });
   }
 
@@ -1481,8 +1481,8 @@ this.play = function (idx) {
     safeParam({
       component: 'animejoy',
       param: {
-        name: 'animejoy_player', type: 'select', default: 'cda',
-        values: { auto: 'Авто', cda: 'CDA', animejoy: 'Наш плеер', allvideo: 'AllVideo', kodik: 'Kodik', mail: 'Mail.ru', sibnet: 'Sibnet' }
+        name: 'animejoy_player', type: 'select', default: 'animejoy',
+        values: { auto: 'Авто', animejoy: 'Наш плеер', allvideo: 'AllVideo', kodik: 'Kodik', sibnet: 'Sibnet', mail: 'Mail.ru', cda: 'CDA' }
       },
       field: { name: 'Приоритет плеера', description: 'Какой плеер выбирать по умолчанию (Sibnet может требовать РФ-IP)' }
     });

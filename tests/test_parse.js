@@ -81,7 +81,8 @@ check('Sibnet', dbg.playerKind('Sibnet', 'https://iv.sibnet.ru/shell.php?videoid
 check('Mail.ru определяется отдельно', dbg.playerKind('Mail', 'https://my.mail.ru/video/embed/1') === 'mail');
 check('собственный источник определяется как «Наш плеер»',
   dbg.playerKind('Наш плеер', 'https://animejoya.ru/player/playerjs.html?file=x') === 'animejoy');
-check('автоприоритет включает собственный плеер', dbg.playerPriority().join(',') === 'cda,animejoy,allvideo,kodik,mail,sibnet');
+check('автоприоритет начинается с собственного плеера',
+  dbg.playerPriority().join(',') === 'animejoy,allvideo,kodik,sibnet,mail,cda');
 
 // ---------- 3. AllVideo: реальный embed (incvideo) ----------
 console.log('== AllVideo regex (реальный incvideo.html) ==');
