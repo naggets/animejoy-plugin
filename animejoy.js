@@ -365,15 +365,34 @@
   }
 
 
-  /* ==================== КОМПОНЕНТ (СПИСОК СЕРИЙ) ==================== */
+/* ==================== КОМПОНЕНТ (СПИСОК СЕРИЙ) ==================== */
 
   var ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"/><path d="M10 8.5v7l6-3.5-6-3.5z" fill="currentColor"/></svg>';
 
+  // элементы в стиле встроенного «Онлайн» (стили ядра Lampa)
+  try {
+    Lampa.Template.add('animejoy_item', '<div class="online selector">' +
+      '<div class="online__body">' +
+        '<div style="position: absolute;left: 0;top: -0.3em;width: 2.4em;height: 2.4em">' + ICON_SVG.replace('<svg ', '<svg style="height: 2.4em; width: 2.4em;" ') + '</div>' +
+        '<div class="online__title" style="padding-left: 2.1em;">{title}</div>' +
+        '<div class="online__quality" style="padding-left: 3.4em;">{quality}</div>' +
+      '</div>' +
+    '</div>');
+
+    Lampa.Template.add('animejoy_row', '<div class="online selector">' +
+      '<div class="online__body">' +
+        '<div class="online__title">{title}</div>' +
+        '<div class="online__quality">{quality}</div>' +
+      '</div>' +
+    '</div>');
+  } catch (e) { console.log('AnimeJoy', 'template error:', e.message); }
+
+  var KIND_NAMES = { cda: 'CDA', allvideo: 'AllVideo', sibnet: 'Sibnet', kodik: 'Kodik' };
+
   function AnimeJoyComponent(object) {
     var movie = object.movie || {};
-    var scroll = new Lampa.Scroll({ mask: true, over: true, step: 200 });
-    var body = $('<div class="animejoy-body"></div>');
-    var html = $('<div class="animejoy"></div>');
+    var scroll = new Lampa.Scroll({ mask: true, over: true });
+    var files = new Lampa.Files(object);
     var last = null;
 
     var state = {
@@ -383,10 +402,17 @@
       playerIdx: 0
     };
 
+    scroll.body().addClass('torrent-list');
+
+    function minus() {
+      scroll.minus(window.innerWidth > 580 ? false : files.render().find('.files__left'));
+    }
+    window.addEventListener('resize', minus, false);
+    minus();
+
     this.create = function () {
       this.activity.loader(true);
-      html.append(scroll.render());
-      scroll.append(body);
+      files.append(scroll.render());
       this.load();
       return this.render();
     };
@@ -413,13 +439,14 @@
           state.players = self.buildPlayers(pl);
           if (!state.players.length) throw new Error('В плейлисте нет серий');
           state.playerIdx = self.defaultPlayerIdx();
-          self.activity.loader(false);
           self.renderList();
+          self.activity.loader(false);
+          self.activity.toggle();
         })
         .catch(function (e) { self.empty(e.message || String(e)); });
     };
 
-    // Собрать структуру: плееры -> серии
+    // Собрать структуру: плееры -> серии (имена плееров из типа ссылки, не из списков)
     this.buildPlayers = function (pl) {
       var byPlayer = {};
       pl.videos.forEach(function (v) {
@@ -431,15 +458,16 @@
       var players = [];
       Object.keys(byPlayer).forEach(function (k) {
         var pIdx = parseInt(k, 10);
-        var meta = pl.players[pIdx] || { name: 'Плеер ' + (pIdx + 1) };
+        var meta = pl.players[pIdx] || {};
         var eps = byPlayer[k];
         var kind = playerKind(meta.name, eps[0] && eps[0].file);
+        var name = KIND_NAMES[kind] || meta.name || ('Плеер ' + (pIdx + 1));
         eps.sort(function (a, b) {
           var na = parseInt(a.name, 10), nb = parseInt(b.name, 10);
           if (isNaN(na) || isNaN(nb)) return a.name.localeCompare(b.name);
           return na - nb;
         });
-        players.push({ name: meta.name, kind: kind, episodes: eps });
+        players.push({ name: name, kind: kind, episodes: eps });
       });
       return players;
     };
@@ -458,59 +486,49 @@
       return Lampa.Utils.hash(['animejoy', state.title ? state.title.id : 0, ep.file].join('_'));
     };
 
-    this.renderList = function () {
+    this.appendItem = function (item) {
+      item.on('hover:focus', function (e) {
+        last = e.target;
+        scroll.update($(e.target), true);
+      });
+      scroll.append(item);
+    };
+this.renderList = function () {
       var self = this;
-      body.empty();
-      scroll.clear();
-      scroll.append(body);
-
-      // строка: найденный тайтл (ручной выбор, если вариантов несколько)
-      var titleRow = $(
-        '<div class="animejoy-row selector">' +
-          '<div class="animejoy-row__label">Тайтл</div>' +
-          '<div class="animejoy-row__value">' + $('<div/>').text(state.title.title).html() + '</div>' +
-        '</div>'
-      );
-      titleRow.on('hover:enter', function () { self.chooseTitle(); });
-      titleRow.on('hover:focus', function (e) { last = e.target; scroll.update($(e.target), true); });
-      body.append(titleRow);
-
-      // строка: плеер
       var player = state.players[state.playerIdx];
-      var unsupported = (player.kind === 'kodik' || player.kind === 'other') ? ' (не поддерживается)' : '';
-      var playerRow = $(
-        '<div class="animejoy-row selector">' +
-          '<div class="animejoy-row__label">Плеер</div>' +
-          '<div class="animejoy-row__value">' + $('<div/>').text(player.name + unsupported).html() + '</div>' +
-        '</div>'
-      );
+      var unsupported = (player.kind === 'kodik' || player.kind === 'other') ? ' — не поддерживается' : '';
+
+      scroll.render().find('.empty').remove();
+      scroll.clear();
+
+      // строка: выбор тайтла
+      var titleRow = $(Lampa.Template.get('animejoy_row', {
+        title: 'Тайтл',
+        quality: state.title.title
+      }));
+      titleRow.on('hover:enter', function () { self.chooseTitle(); });
+      self.appendItem(titleRow);
+
+      // строка: выбор плеера
+      var playerRow = $(Lampa.Template.get('animejoy_row', {
+        title: 'Плеер',
+        quality: player.name + unsupported
+      }));
       playerRow.on('hover:enter', function () { self.choosePlayer(); });
-      playerRow.on('hover:focus', function (e) { last = e.target; scroll.update($(e.target), true); });
-      body.append(playerRow);
+      self.appendItem(playerRow);
 
       // серии
       player.episodes.forEach(function (ep, idx) {
-        var hash = self.episodeHash(ep);
-        var view = Lampa.Timeline.view(hash);
-        var badge = '';
-        if (view.percent > 0 && view.percent < 100) badge = '<div class="animejoy-item__badge">' + view.percent + '%</div>';
-        else if (view.percent >= 100) badge = '<div class="animejoy-item__badge animejoy-item__badge--done">✓</div>';
+        var item = $(Lampa.Template.get('animejoy_item', {
+          title: ep.name,
+          quality: player.name + ' · субтитры'
+        }));
 
-        var item = $(
-          '<div class="animejoy-item selector">' +
-            '<div class="animejoy-item__num">' + (idx + 1) + '</div>' +
-            '<div class="animejoy-item__body">' +
-              '<div class="animejoy-item__title">' + $('<div/>').text(ep.name).html() + '</div>' +
-              '<div class="animejoy-item__info">' + $('<div/>').text(player.name).html() + ' · субтитры</div>' +
-            '</div>' + badge +
-          '</div>'
-        );
+        var view = Lampa.Timeline.view(self.episodeHash(ep));
+        item.append(Lampa.Timeline.render(view));
+
         item.on('hover:enter', function () { self.play(idx); });
-        item.on('hover:focus', function (e) {
-          last = e.target;
-          scroll.update($(e.target), true);
-        });
-        body.append(item);
+        self.appendItem(item);
       });
     };
 
@@ -548,8 +566,7 @@
         onBack: function () { Lampa.Controller.toggle('content'); }
       });
     };
-
-    this.play = function (idx) {
+this.play = function (idx) {
       var self = this;
       var player = state.players[state.playerIdx];
       var eps = player.episodes;
@@ -598,27 +615,26 @@
 
     this.empty = function (msg) {
       this.activity.loader(false);
-      body.empty();
       scroll.clear();
-      scroll.append(body);
-      var box = $(
-        '<div class="animejoy-empty selector">' +
-          '<div class="animejoy-empty__title">' + PLUGIN_TITLE + '</div>' +
-          '<div class="animejoy-empty__descr">' + $('<div/>').text(msg || 'Ничего не найдено').html() + '</div>' +
-          '<div class="animejoy-empty__hint">Нажмите OK, чтобы повторить</div>' +
-        '</div>'
-      );
-      var self = this;
-      box.on('hover:enter', function () { self.load(); });
-      box.on('hover:focus', function (e) { last = e.target; });
-      body.append(box);
+      var empty;
+      try {
+        empty = Lampa.Template.get('list_empty');
+        if (msg) empty.find('.empty__descr').text(msg);
+      } catch (e) {
+        empty = $('<div class="empty selector"><div class="empty__title">' + PLUGIN_TITLE + '</div><div class="empty__descr"></div><div class="empty__descr" style="opacity:.5">Нажмите OK, чтобы повторить</div></div>');
+        if (msg) empty.find('.empty__descr').first().text(msg);
+        var self = this;
+        empty.on('hover:enter', function () { self.load(); });
+      }
+      scroll.append(empty);
     };
 
     this.start = function () {
       if (Lampa.Activity.active().activity !== this.activity) return;
+
       Lampa.Controller.add('content', {
         toggle: function () {
-          Lampa.Controller.collectionSet(scroll.render());
+          Lampa.Controller.collectionSet(scroll.render(), files.render());
           Lampa.Controller.collectionFocus(last || false, scroll.render());
         },
         left: function () {
@@ -630,24 +646,23 @@
           if (Navigator.canmove('up')) Navigator.move('up');
           else Lampa.Controller.toggle('head');
         },
-        down: function () { if (Navigator.canmove('down')) Navigator.move('down'); },
+        down: function () { Navigator.move('down'); },
         back: this.back
       });
+
       Lampa.Controller.toggle('content');
     };
 
+    this.render = function () { return files.render(); };
     this.pause = function () {};
     this.stop = function () {};
-    this.render = function () { return html; };
+    this.back = function () { Lampa.Activity.backward(); };
     this.destroy = function () {
       scroll.destroy();
-      body.remove();
-      html.remove();
+      files.destroy();
+      window.removeEventListener('resize', minus);
     };
-    this.back = function () { Lampa.Activity.backward(); };
   }
-
-
   /* ==================== СТИЛИ ==================== */
 
   function injectCss() {
