@@ -684,42 +684,48 @@
   function resetAuth() { authPromise = null; }
 
   function initSettings() {
-    if (!Lampa.SettingsApi) return;
+    if (!Lampa.SettingsApi || typeof Lampa.SettingsApi.addComponent !== 'function') return;
 
-    Lampa.SettingsApi.addComponent({
-      component: 'animejoy',
-      name: PLUGIN_TITLE,
-      icon: ICON_SVG
-    });
+    function safeParam(data) {
+      try { Lampa.SettingsApi.addParam(data); } catch (e) { console.log('AnimeJoy', 'addParam failed:', e.message); }
+    }
 
-    Lampa.SettingsApi.addParam({
+    try {
+      Lampa.SettingsApi.addComponent({
+        component: 'animejoy',
+        name: PLUGIN_TITLE,
+        icon: ICON_SVG
+      });
+    } catch (e) { console.log('AnimeJoy', 'addComponent failed:', e.message); return; }
+
+    safeParam({
       component: 'animejoy',
       param: { name: 'animejoy_domain', type: 'input', values: '', default: DEFAULT_DOMAIN, placeholder: DEFAULT_DOMAIN },
       field: { name: 'Домен / зеркало', description: 'Актуальное зеркало AnimeJoy, например ' + DEFAULT_DOMAIN },
       onChange: resetAuth
     });
 
-    Lampa.SettingsApi.addParam({
+    safeParam({
       component: 'animejoy',
       param: { name: 'animejoy_login', type: 'input', values: '', default: '', placeholder: 'Логин' },
       field: { name: 'Логин', description: 'Логин от animejoya.ru' },
       onChange: resetAuth
     });
 
-    Lampa.SettingsApi.addParam({
+    safeParam({
       component: 'animejoy',
       param: { name: 'animejoy_password', type: 'input', values: '', default: '', placeholder: 'Пароль' },
       field: { name: 'Пароль', description: 'Пароль от animejoya.ru' },
       onChange: resetAuth
     });
 
-    Lampa.SettingsApi.addParam({
+    safeParam({
       component: 'animejoy',
       param: { name: 'animejoy_proxy', type: 'input', values: '', default: '', placeholder: 'https://corsproxy.io/?url=' },
       field: { name: 'CORS-прокси', description: 'Нужен только в браузере (lampa.mx). Пример: https://corsproxy.io/?url=  В приложении на ТВ оставьте пустым' }
     });
 
-    Lampa.SettingsApi.addParam({
+    safeParam({
       component: 'animejoy',
       param: { name: 'animejoy_auth_test', type: 'button' },
       field: { name: 'Проверить вход', description: 'Авторизоваться и проверить доступ к сайту' },
@@ -734,7 +740,7 @@
       }
     });
 
-    Lampa.SettingsApi.addParam({
+    safeParam({
       component: 'animejoy',
       param: {
         name: 'animejoy_player', type: 'select', default: 'cda',
@@ -743,7 +749,7 @@
       field: { name: 'Приоритет плеера', description: 'Какой плеер выбирать по умолчанию (Sibnet может требовать РФ-IP)' }
     });
 
-    Lampa.SettingsApi.addParam({
+    safeParam({
       component: 'animejoy',
       param: {
         name: 'animejoy_quality', type: 'select', default: '1080p',
@@ -756,33 +762,44 @@
   /* ==================== КНОПКА В КАРТОЧКЕ ==================== */
 
   function injectButton(e) {
-    var render = e.object.activity.render();
-    if (!render || render.find('.view--animejoy').length) return;
+    try {
+      var render = e.object.activity.render();
+      if (!render || !render.length || render.find('.view--animejoy').length) return;
+      if (!e.data || !e.data.movie) return;
 
-    var btn = $('<div class="full-start__button selector view--animejoy">' + ICON_SVG + '<span>' + PLUGIN_TITLE + '</span></div>');
-    btn.on('hover:enter', function () {
-      Lampa.Activity.push({
-        url: '',
-        component: 'animejoy_online',
-        title: PLUGIN_TITLE,
-        movie: e.data.movie,
-        page: 1
+      var btn = $('<div class="full-start__button selector view--animejoy view--animejoy">' + ICON_SVG + '<span>' + PLUGIN_TITLE + '</span></div>');
+      btn.on('hover:enter', function () {
+        Lampa.Activity.push({
+          url: '',
+          component: 'animejoy_online',
+          title: PLUGIN_TITLE,
+          movie: e.data.movie,
+          page: 1
+        });
       });
-    });
 
-    var anchor = render.find('.view--online');
-    if (anchor.length) anchor.after(btn);
-    else {
-      var box = render.find('.full-start__buttons').first();
-      if (box.length) box.append(btn);
+      // разные версии интерфейса: пробуем несколько мест вставки
+      var anchor = render.find('.view--online').first();
+      if (anchor.length) {
+        anchor.after(btn);
+      } else {
+        var box = render.find('.full-start__buttons').first();
+        if (!box.length) box = render.find('.full-start-new__buttons').first();
+        if (!box.length) box = render.find('.full-start').first();
+        if (box.length) box.append(btn);
+        else render.append(btn);
+      }
+      console.log('AnimeJoy', 'button injected');
+    } catch (err) {
+      console.log('AnimeJoy', 'injectButton error:', err.message);
     }
   }
 
   /* ==================== ИНИЦИАЛИЗАЦИЯ ==================== */
 
   function startPlugin() {
-    injectCss();
-    initSettings();
+    try { injectCss(); } catch (e) { console.log('AnimeJoy', 'css error:', e.message); }
+    try { initSettings(); } catch (e) { console.log('AnimeJoy', 'settings error:', e.message); }
     Lampa.Component.add('animejoy_online', AnimeJoyComponent);
     Lampa.Listener.follow('full', function (e) {
       if (e.type === 'complite') injectButton(e);
