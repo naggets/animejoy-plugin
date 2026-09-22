@@ -73,6 +73,7 @@ check('Kodik по имени', dbg.playerKind('Kodik', 'https://kodikplayer.com/
 check('CDA по ссылке', dbg.playerKind('CDA', 'https://ebd.cda.pl/620x395/962595098') === 'cda');
 check('AllVideo по fsst', dbg.playerKind('AllVideo', 'https://fsst.online/embed/751041/') === 'allvideo');
 check('Sibnet', dbg.playerKind('Sibnet', 'https://iv.sibnet.ru/shell.php?videoid=1') === 'sibnet');
+check('автоприоритет: CDA, AllVideo, Kodik, Sibnet', dbg.playerPriority().join(',') === 'cda,allvideo,kodik,sibnet');
 
 // ---------- 3. AllVideo: реальный embed (incvideo) ----------
 console.log('== AllVideo regex (реальный incvideo.html) ==');
@@ -191,6 +192,16 @@ const naruto = dbg.rankSearchResults([
   { id: 'main', title: 'Наруто [220 из 220]' }
 ], 'Наруто', 0);
 check('Naruto: оригинальные 220 серий идут первыми', naruto[0] && naruto[0].id === 'main');
+
+const narutoLatin = dbg.rankSearchResults([
+  { id: 'boruto', title: 'Боруто: Новое поколение Наруто [293 из 293]' },
+  { id: 'movie', title: 'Наруто: Последний фильм' },
+  { id: 'shippuden', title: 'Наруто: Ураганные хроники [500 из 500]' },
+  { id: 'main', title: 'Наруто [220 из 220]' }
+], 'Naruto', 0);
+check('Naruto латиницей совпадает с «Наруто»', dbg.exactTitle('Наруто [220 из 220]', 'Naruto'));
+check('Naruto латиницей: 220 серий выше Boruto', narutoLatin[0] && narutoLatin[0].id === 'main');
+check('кириллица транслитерируется стабильно', dbg.romanTitle('Наруто: Ураганные хроники') === 'naruto uragannye hroniki');
 
 const complete = dbg.episodeProgress('Наруто [220 из 220]');
 const ongoing = dbg.episodeProgress('Боруто [280 из 300]');

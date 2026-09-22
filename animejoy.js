@@ -10,6 +10,7 @@
   window.animejoy_plugin_loaded = true;
 
   var PLUGIN_TITLE = 'AnimeJoy';
+  var PLUGIN_VERSION = '1.4.0';
   var DEFAULT_DOMAIN = 'https://animejoya.ru';
 
   // безопасный доступ к хранилищу (совместимость со старыми сборками Lampa)
@@ -46,7 +47,7 @@
 
   function playerPriority() {
     var p = storageGet('animejoy_player', 'cda');
-    var all = [p, 'cda', 'allvideo', 'sibnet', 'kodik'];
+    var all = [p, 'cda', 'allvideo', 'kodik', 'sibnet'];
     return all.filter(function (v, i) { return all.indexOf(v) === i; });
   }
 
@@ -161,6 +162,39 @@
       .trim();
   }
 
+  var CYR_TO_LAT = {
+    а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh',
+    з: 'z', и: 'i', й: 'i', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o',
+    п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts',
+    ч: 'ch', ш: 'sh', щ: 'shch', ъ: '', ы: 'y', ь: '', э: 'e',
+    ю: 'yu', я: 'ya', ѕ: 's'
+  };
+
+  // Дополнительная форма для карточек с латинским названием (Naruto) при
+  // кириллической выдаче AnimeJoy (Наруто). Для смешанных названий сначала
+  // исправляем латинские двойники букв.
+  function romanTitle(t) {
+    var raw = String(t || '').toLowerCase()
+      .replace(/\[.*?\]/g, ' ')
+      .replace(/\(.*?\)/g, ' ');
+    if (/[а-яё]/i.test(raw)) raw = homoglyph(raw);
+    return raw.replace(/[а-яёѕ]/g, function (ch) { return CYR_TO_LAT[ch] || ch; })
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function titleForms(t) {
+    var forms = [normTitle(t), romanTitle(t)];
+    return forms.filter(function (v, i, a) { return v && a.indexOf(v) === i; });
+  }
+
+  function exactTitle(a, b) {
+    var af = titleForms(a);
+    var bf = titleForms(b);
+    return af.some(function (x) { return bf.indexOf(x) !== -1; });
+  }
+
   // производные запросы: без первого слова и по хвосту названия
   // («Великий расхититель гробниц» -> «расхититель гробниц»)
   function derivedQueries(title) {
@@ -244,20 +278,28 @@
   }
 
   function scoreResult(item, query, wantSeason) {
-    var a = normTitle(item.title);
-    var b = normTitle(query);
-    if (!a || !b) return 0;
-    var score = 0;
-    if (a === b) score = 100;
-    else if (a.indexOf(b) !== -1) score = Math.max(30, 70 - (a.length - b.length));
-    else if (b.indexOf(a) !== -1) score = Math.max(25, 60 - (b.length - a.length));
-    else {
-      var wa = a.split(' '), wb = b.split(' '), hit = 0;
-      wb.forEach(function (w) { if (w && wa.indexOf(w) !== -1) hit++; });
-      // покрытие слов запроса важнее «хвоста» названия ([13 из 13], год и т.п.)
-      var coverage = wb.length ? hit / wb.length : 0;
-      score = Math.round(80 * coverage) - (wa.length - wb.length > 6 ? 5 : 0);
+    function scorePair(a, b) {
+      if (!a || !b) return 0;
+      var pairScore = 0;
+      if (a === b) pairScore = 100;
+      else if (a.indexOf(b) !== -1) pairScore = Math.max(30, 70 - (a.length - b.length));
+      else if (b.indexOf(a) !== -1) pairScore = Math.max(25, 60 - (b.length - a.length));
+      else {
+        var wa = a.split(' '), wb = b.split(' '), hit = 0;
+        wb.forEach(function (w) { if (w && wa.indexOf(w) !== -1) hit++; });
+        var coverage = wb.length ? hit / wb.length : 0;
+        pairScore = Math.round(80 * coverage) - (wa.length - wb.length > 6 ? 5 : 0);
+      }
+      return pairScore;
     }
+
+    var itemForms = titleForms(item.title);
+    var queryForms = titleForms(query);
+    var score = 0;
+    itemForms.forEach(function (a) {
+      queryForms.forEach(function (b) { score = Math.max(score, scorePair(a, b)); });
+    });
+    if (!itemForms.length || !queryForms.length) return 0;
     var s = seasonOf(item.title);
     if (wantSeason && s) score += (s === wantSeason) ? 25 : -25;
 
@@ -284,7 +326,7 @@
   function rankSearchResults(list, query, wantSeason) {
     return (list || []).map(function (item) {
       item._score = scoreResult(item, query, wantSeason);
-      item._exact = normTitle(item.title) === normTitle(query);
+      item._exact = exactTitle(item.title, query);
       return item;
     }).sort(function (x, y) {
       // Полное совпадение всегда выше продолжений, OVA и фильмов — независимо
@@ -875,7 +917,13 @@
     };
 
     this.episodeHash = function (ep) {
-      return Lampa.Utils.hash(['animejoy', state.title ? state.title.id : 0, ep.file].join('_'));
+      // Прогресс должен быть общим для одной серии при переключении плеера,
+      // поэтому ссылка CDN (разная у CDA/Kodik/Sibnet) в хеш не входит.
+      return Lampa.Utils.hash([
+        'animejoy',
+        state.title ? state.title.id : 0,
+        String(ep.name || '').toLowerCase().replace(/\s+/g, ' ').trim()
+      ].join('_'));
     };
 
     this.appendItem = function (item) {
@@ -1054,6 +1102,15 @@ this.play = function (idx) {
           Lampa.Noty.show(self._lastPlayError ? self._lastPlayError.message : 'Не удалось получить ссылку на видео');
           return;
         }
+        // Timeline сохраняет позицию серии, а Favorite.history отвечает за
+        // появление самой карточки в разделах «История» / «Продолжить».
+        try {
+          if (Lampa.Favorite && typeof Lampa.Favorite.add === 'function' && movie && movie.id) {
+            Lampa.Favorite.add('history', movie, 100);
+          }
+        } catch (e) {
+          console.log('AnimeJoy', 'history error:', e.message);
+        }
         Lampa.Player.play(current);
         if (playlist.length > 1) Lampa.Player.playlist(playlist);
       });
@@ -1154,7 +1211,7 @@ this.play = function (idx) {
     try {
       Lampa.SettingsApi.addComponent({
         component: 'animejoy',
-        name: PLUGIN_TITLE,
+        name: PLUGIN_TITLE + ' ' + PLUGIN_VERSION,
         icon: ICON_SVG
       });
     } catch (e) { console.log('AnimeJoy', 'addComponent failed:', e.message); return; }
@@ -1205,7 +1262,7 @@ this.play = function (idx) {
       component: 'animejoy',
       param: {
         name: 'animejoy_player', type: 'select', default: 'cda',
-        values: { auto: 'Авто', cda: 'CDA', allvideo: 'AllVideo', sibnet: 'Sibnet', kodik: 'Kodik' }
+        values: { auto: 'Авто', cda: 'CDA', allvideo: 'AllVideo', kodik: 'Kodik', sibnet: 'Sibnet' }
       },
       field: { name: 'Приоритет плеера', description: 'Какой плеер выбирать по умолчанию (Sibnet может требовать РФ-IP)' }
     });
@@ -1289,8 +1346,11 @@ this.play = function (idx) {
     parsePlaylist: parsePlaylist,
     parseSearchResults: parseSearchResults,
     playerKind: playerKind,
+    playerPriority: playerPriority,
     pickQuality: pickQuality,
     normTitle: normTitle,
+    romanTitle: romanTitle,
+    exactTitle: exactTitle,
     homoglyph: homoglyph,
     derivedQueries: derivedQueries,
     seasonOf: seasonOf,
