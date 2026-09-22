@@ -20,7 +20,7 @@
 1. В Lampa: **Настройки → Расширения → Добавить плагин**
 2. Укажите URL файла `animejoy.js` из этого репозитория (raw-ссылка):
    ```
-   https://raw.githubusercontent.com/<USERNAME>/<REPO>/main/animejoy.js
+   https://raw.githubusercontent.com/naggets/animejoy-plugin/main/animejoy.js
    ```
 3. Зайдите в **Настройки → AnimeJoy** и заполните:
    - **Домен / зеркало** — актуальное зеркало (по умолчанию `https://animejoya.ru`)
