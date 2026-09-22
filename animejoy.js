@@ -389,6 +389,78 @@
 
   var KIND_NAMES = { cda: 'CDA', allvideo: 'AllVideo', sibnet: 'Sibnet', kodik: 'Kodik' };
 
+  // Группировка плейлиста в список плееров.
+  // data-id у animejoy: у группы "0_0", у видео "0_0_1" (последний сегмент — плеер),
+  // у плеера в списке — тот же id, что и у видео.
+  function buildPlayersFromPlaylist(pl) {
+    var groups = pl.groups || [];
+    var playersMeta = pl.players || [];
+
+    function groupOf(dataId) {
+      var found = null;
+      var id = String(dataId || '');
+      groups.forEach(function (g) {
+        var gid = String(g.id || '');
+        if (!gid) return;
+        if (id === gid || id.indexOf(gid + '_') === 0) {
+          if (!found || gid.length > String(found.id).length) found = g;
+        }
+      });
+      return found;
+    }
+
+    function metaOf(dataId) {
+      var id = String(dataId || '');
+      var found = null;
+      playersMeta.forEach(function (p) {
+        if (String(p.id) === id) found = p;
+      });
+      return found || {};
+    }
+
+    var byKey = {};
+    var order = [];
+    (pl.videos || []).forEach(function (v) {
+      var key = String(v.dataId || '');
+      if (!byKey[key]) {
+        byKey[key] = { eps: [], sample: v };
+        order.push(key);
+      }
+      byKey[key].eps.push(v);
+    });
+
+    var players = [];
+    order.forEach(function (key) {
+      var bucket = byKey[key];
+      var eps = bucket.eps;
+      var meta = metaOf(key);
+      var kind = playerKind(meta.name, eps[0] && eps[0].file);
+      var name = KIND_NAMES[kind] || meta.name || ('Плеер ' + (order.indexOf(key) + 1));
+      var group = groupOf(key);
+      if (group && groups.length > 1) name = group.name + ' · ' + name;
+
+      eps.sort(function (a, b) {
+        var na = parseInt(a.name, 10), nb = parseInt(b.name, 10);
+        if (isNaN(na) || isNaN(nb)) return String(a.name).localeCompare(String(b.name));
+        return na - nb;
+      });
+
+      players.push({
+        name: name,
+        kind: kind,
+        episodes: eps,
+        supported: kind !== 'kodik' && kind !== 'other'
+      });
+    });
+
+    // поддерживаемые — вперёд (ничего не выбрасываем)
+    players.sort(function (a, b) { return (b.supported ? 1 : 0) - (a.supported ? 1 : 0); });
+
+    console.log('AnimeJoy', 'players:', players.map(function (p) { return p.name + '(' + p.kind + ')'; }).join(', '));
+
+    return players;
+  }
+
   function AnimeJoyComponent(object) {
     var movie = object.movie || {};
     var scroll = new Lampa.Scroll({ mask: true, over: true });
@@ -446,49 +518,9 @@
         .catch(function (e) { self.empty(e.message || String(e)); });
     };
 
-    // Собрать структуру: группы (фансаб) x плееры -> серии.
-    // dataId вида "группа_плеер", Kodik — одна ссылка на весь сериал, поэтому
-    // группируем по полному пути без последнего сегмента и скрываем неподдерживаемое.
+    // Собрать структуру: плееры -> серии
     this.buildPlayers = function (pl) {
-      var byKey = {};
-      pl.videos.forEach(function (v) {
-        var parts = v.dataId.split('_');
-        var key = parts.slice(0, -1).join('_');
-        if (!byKey[key]) byKey[key] = {
-          groupIdx: parseInt(parts[0], 10) || 0,
-          pIdx: parseInt(parts[parts.length - 1], 10) || 0,
-          eps: []
-        };
-        byKey[key].eps.push(v);
-      });
-      var players = [];
-      Object.keys(byKey).forEach(function (key) {
-        var g = byKey[key];
-        var meta = pl.players[g.pIdx] || {};
-        var eps = g.eps;
-        var kind = playerKind(meta.name, eps[0] && eps[0].file);
-        var name = KIND_NAMES[kind] || meta.name || ('Плеер ' + (g.pIdx + 1));
-        var group = pl.groups[g.groupIdx];
-        if (group && pl.groups.length > 1) name = group.name + ' · ' + name;
-        eps.sort(function (a, b) {
-          var na = parseInt(a.name, 10), nb = parseInt(b.name, 10);
-          if (isNaN(na) || isNaN(nb)) return a.name.localeCompare(b.name);
-          return na - nb;
-        });
-        players.push({
-          name: name,
-          kind: kind,
-          episodes: eps,
-          supported: kind !== 'kodik' && kind !== 'other'
-        });
-      });
-      // поддерживаемые — вперёд
-      players.sort(function (a, b) { return (b.supported ? 1 : 0) - (a.supported ? 1 : 0); });
-      // если есть хоть один поддерживаемый — прячем Kodik/прочие
-      if (players.some(function (p) { return p.supported; })) {
-        players = players.filter(function (p) { return p.supported; });
-      }
-      return players;
+      return buildPlayersFromPlaylist(pl);
     };
 
     this.defaultPlayerIdx = function () {
@@ -865,7 +897,8 @@ this.play = function (idx) {
     pickQuality: pickQuality,
     normTitle: normTitle,
     seasonOf: seasonOf,
-    scoreResult: scoreResult
+    scoreResult: scoreResult,
+    buildPlayersFromPlaylist: buildPlayersFromPlaylist
   };
 
 })();

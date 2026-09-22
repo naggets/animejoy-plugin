@@ -1,7 +1,5 @@
 // Тесты парсеров плагина animejoy.js на реальных данных, снятых с сайта
 const fs = require('fs');
-const path = require('path');
-const fx = (f) => path.join(__dirname, 'fixtures', f);
 
 // --- Стабы окружения Lampa ---
 global.window = {};
@@ -18,7 +16,7 @@ global.Lampa = {
 };
 global.$ = {};
 
-require(path.join(__dirname, '..', 'animejoy.js'));
+require('./animejoy.js');
 
 const dbg = global.window.animejoy_debug;
 if (!dbg) { console.error('FAIL: animejoy_debug не экспортирован'); process.exit(1); }
@@ -31,7 +29,7 @@ function check(name, cond) {
 
 // ---------- 1. Парсинг плейлиста (реальный ответ playlists.php) ----------
 console.log('== parsePlaylist ==');
-const plJson = JSON.parse(fs.readFileSync(fx('playlists.json'), 'utf8'));
+const plJson = JSON.parse(fs.readFileSync('playlists2.json', 'utf8'));
 const pl = dbg.parsePlaylist(plJson.response);
 
 check('группа AL найдена', pl.groups.length === 1 && pl.groups[0].name === 'AL');
@@ -59,7 +57,7 @@ check('Sibnet', dbg.playerKind('Sibnet', 'https://iv.sibnet.ru/shell.php?videoid
 
 // ---------- 3. AllVideo: реальный embed (incvideo) ----------
 console.log('== AllVideo regex (реальный incvideo.html) ==');
-const inc = fs.readFileSync(fx('incvideo.html'), 'utf8');
+const inc = fs.readFileSync('incvideo.html', 'utf8');
 const fm = /file:\s*"([^"]+)"/.exec(inc);
 check('file: найден', !!fm);
 const q = {};
@@ -72,7 +70,7 @@ check('720p — mp4', q['720p'] && q['720p'].includes('.mp4'));
 
 // ---------- 4. CDA API (реальный cda_api.json) ----------
 console.log('== CDA API ==');
-const cda = JSON.parse(fs.readFileSync(fx('cda_api.json'), 'utf8'));
+const cda = JSON.parse(fs.readFileSync('cda_api.json', 'utf8'));
 const cq = {};
 (cda.video.qualities || []).forEach(x => { if (x.file) cq[x.name] = x.file; });
 check('4 качества', Object.keys(cq).length === 4);
@@ -107,6 +105,38 @@ check('seasonOf "[ТВ-3]" = 3', dbg.seasonOf('Атака титанов [ТВ-3
 const s2 = dbg.scoreResult({ title: 'Герой-рационал перестраивает королевство (2 сезон) [13 из 13]' }, 'Герой-рационал перестраивает королевство', 2);
 const s1 = dbg.scoreResult({ title: 'Герой-рационал перестраивает королевство [13 из 13]' }, 'Герой-рационал перестраивает королевство', 2);
 check('2-й сезон выигрывает у 1-го при поиске 2-го сезона', s2 > s1);
+
+// ---------- 8. Группировка плееров ----------
+console.log('== buildPlayersFromPlaylist ==');
+const bp = dbg.buildPlayersFromPlaylist(pl);
+check('4 плеера в реальном плейлисте (ничего не теряется)', bp.length === 4);
+check('поддерживаемые (CDA/AllVideo/Sibnet) идут первыми', bp[0].kind !== 'kodik' && bp[0].supported === true);
+check('Kodik помечен как неподдерживаемый', bp.some(p => p.kind === 'kodik' && p.supported === false));
+check('имена плееров осмысленные (CDA/Sibnet/AllVideo/Kodik)', bp.every(p => /^(CDA|Sibnet|AllVideo|Kodik)$/.test(p.name)));
+const cdaPlayer = bp.find(p => p.kind === 'cda');
+check('CDA: 13 серий и первая = «1 серия»', cdaPlayer && cdaPlayer.episodes.length === 13 && cdaPlayer.episodes[0].name === '1 серия');
+
+// синтетика: две фансаб-группы
+const multi = dbg.buildPlayersFromPlaylist({
+  groups: [{ id: '0', name: 'AL' }, { id: '1', name: 'AniLibria' }],
+  players: [{ id: '0_0_0', name: 'Kodik' }, { id: '0_0_1', name: 'Sibnet' }],
+  videos: [
+    { file: 'https://iv.sibnet.ru/shell.php?videoid=1', dataId: '0_0_1', name: '1 серия' },
+    { file: 'https://iv.sibnet.ru/shell.php?videoid=2', dataId: '1_0_1', name: '1 серия' },
+    { file: 'https://kodikplayer.com/serial/1/hash/720p', dataId: '0_0_0', name: '-' }
+  ]
+});
+check('две группы -> отдельные плееры с префиксом группы', multi.length === 3 &&
+  multi.some(p => p.name === 'AL · Sibnet') && multi.some(p => p.name === 'AniLibria · Sibnet'));
+check('в мультигруппе Kodik не выброшен, но последний', multi[multi.length - 1].kind === 'kodik');
+
+// синтетика: dataId без разделителей не роняет парсер
+const single = dbg.buildPlayersFromPlaylist({
+  groups: [{ id: '0', name: 'AL' }],
+  players: [{ id: 'x', name: 'AllVideo' }],
+  videos: [{ file: 'https://fsst.online/embed/1/', dataId: '0', name: 'Фильм' }]
+});
+check('одиночный dataId -> один плеер с серией', single.length === 1 && single[0].episodes.length === 1);
 
 console.log('\nИтого: ' + passed + ' OK, ' + failed + ' FAIL');
 process.exit(failed ? 1 : 0);
