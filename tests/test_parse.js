@@ -155,5 +155,18 @@ const single = dbg.buildPlayersFromPlaylist({
 });
 check('одиночный dataId -> один плеер с серией', single.length === 1 && single[0].episodes.length === 1);
 
+// ---------- 9. Расхождение названий (латинские двойники + лишние слова) ----------
+console.log('== названия TMDB vs animejoy ==');
+const homoglyphTitle = 'Pacxититeль гpoбниц [11 из 12]';
+check('латинские двойники нормализуются', dbg.normTitle(homoglyphTitle).indexOf('расхититель гробниц') !== -1);
+check('derivedQueries: без первого слова', dbg.derivedQueries('Великий расхититель гробниц').indexOf('расхититель гробниц') !== -1);
+check('derivedQueries: последние 2 слова', dbg.derivedQueries('Великий расхититель гробниц').indexOf('расхититель гробниц') !== -1);
+
+const scoreHomoglyph = dbg.scoreResult({ title: homoglyphTitle }, 'Великий расхититель гробниц', 0);
+check('найденный тайтл проходит порог (>=25) даже с лишним словом', scoreHomoglyph >= 25);
+const scoreExact = dbg.scoreResult({ title: homoglyphTitle }, 'расхититель гробниц', 0);
+check('точный производный запрос даёт высокий балл', scoreExact >= 50);
+check('постороннее аниме не проходит порог', dbg.scoreResult({ title: 'Ван-Пис (1101+) [1179 из ХХ] One Piece' }, 'Великий расхититель гробниц', 0) < 25);
+
 console.log('\nИтого: ' + passed + ' OK, ' + failed + ' FAIL');
 process.exit(failed ? 1 : 0);

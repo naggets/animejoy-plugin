@@ -141,15 +141,38 @@
 
   /* ============================ ПОИСК ТАЙТЛА ============================ */
 
+  // AnimeJoy часто пишет названия латинскими двойниками кириллицы (Pacxититeль),
+  // поэтому приводим похожие латинские буквы к кириллице
+  var HOMOGLYPHS = {
+    a: 'а', c: 'с', e: 'е', o: 'о', p: 'р', x: 'х', y: 'у', k: 'к',
+    m: 'м', t: 'т', h: 'н', b: 'в', g: 'г', n: 'п', u: 'и', s: 'ѕ'
+  };
+
+  function homoglyph(t) {
+    return String(t || '').replace(/[aceopxykmthbgnus]/g, function (ch) { return HOMOGLYPHS[ch] || ch; });
+  }
+
   function normTitle(t) {
-    return (t || '')
-      .toLowerCase()
+    return homoglyph(String(t || '').toLowerCase())
       .replace(/\[.*?\]/g, ' ')
       .replace(/\(.*?\)/g, ' ')
       .replace(/[^a-zа-яё0-9]+/giu, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   }
+
+  // производные запросы: без первого слова и по хвосту названия
+  // («Великий расхититель гробниц» -> «расхититель гробниц»)
+  function derivedQueries(title) {
+    var out = [];
+    var clean = String(title || '').replace(/[\(\[].*?[\)\]]/g, ' ').replace(/\s+/g, ' ').trim();
+    var words = clean.split(' ').filter(Boolean);
+    if (words.length > 1) out.push(words.slice(1).join(' '));
+    if (words.length > 2) out.push(words.slice(-2).join(' '));
+    if (words.length > 3) out.push(words.slice(-3).join(' '));
+    return out;
+  }
+
 
   function seasonOf(t) {
     var m = /(\d+)\s*сезон/i.exec(t || '');
@@ -199,35 +222,103 @@
     else {
       var wa = a.split(' '), wb = b.split(' '), hit = 0;
       wb.forEach(function (w) { if (w && wa.indexOf(w) !== -1) hit++; });
-      score = Math.round(40 * hit / Math.max(wa.length, wb.length));
+      // покрытие слов запроса важнее «хвоста» названия ([13 из 13], год и т.п.)
+      var coverage = wb.length ? hit / wb.length : 0;
+      score = Math.round(80 * coverage) - (wa.length - wb.length > 6 ? 5 : 0);
     }
     var s = seasonOf(item.title);
     if (wantSeason && s) score += (s === wantSeason) ? 25 : -25;
     return score;
   }
 
+  // Альтернативные названия через Shikimori (russian / romaji / синонимы)
+  function shikimoriQueries(movie) {
+    var q = movie.original_name || movie.original_title || movie.name || movie.title || '';
+    if (!q) return Promise.resolve([]);
+
+    return request('https://shikimori.one/api/animes?limit=5&search=' + encodeURIComponent(q))
+      .then(function (res) {
+        var list = parseMaybeJson(res.data);
+        if (!list || !list.length) return [];
+
+        // выбираем самого близкого по году (если он есть в карточке)
+        var year = parseInt((movie.release_date || movie.first_air_date || '').slice(0, 4), 10) || 0;
+        if (year) {
+          list.sort(function (x, y) {
+            var dx = Math.abs((parseInt((x.aired_on || '').slice(0, 4), 10) || 0) - year);
+            var dy = Math.abs((parseInt((y.aired_on || '').slice(0, 4), 10) || 0) - year);
+            return dx - dy;
+          });
+        }
+
+        var best = list[0];
+        return request('https://shikimori.one/api/animes/' + best.id)
+          .then(function (dres) {
+            var d = parseMaybeJson(dres.data) || {};
+            var out = [d.russian, d.name, d.english].concat(Array.isArray(d.synonyms) ? d.synonyms : []);
+            return out.filter(Boolean);
+          })
+          .catch(function () {
+            return [best.russian, best.name].filter(Boolean);
+          });
+      })
+      .catch(function () { return []; });
+  }
+
+
   function findTitle(movie) {
-    var queries = [];
-    if (movie.name) queries.push(movie.name);
-    if (movie.title && movie.title !== movie.name) queries.push(movie.title);
-    if (movie.original_name) queries.push(movie.original_name);
-    if (movie.original_title && movie.original_title !== movie.original_name) queries.push(movie.original_title);
+    var names = [movie.name, movie.title, movie.original_name, movie.original_title]
+      .filter(function (v, i, a) { return v && a.indexOf(v) === i; });
 
     var wantSeason = seasonOf(movie.name || '') || seasonOf(movie.title || '');
 
-    var chain = Promise.resolve([]);
-    queries.forEach(function (q) {
-      chain = chain.then(function (found) {
-        if (found && found.length) return found;
-        return searchSite(q).then(function (list) {
-          if (!list.length) return [];
-          list.forEach(function (it) { it._score = scoreResult(it, q, wantSeason); });
-          list.sort(function (x, y) { return y._score - x._score; });
-          return list.filter(function (it) { return it._score >= 25; });
+    var queryList = [];
+    names.forEach(function (n) {
+      queryList.push(n);
+      derivedQueries(n).forEach(function (d) { queryList.push(d); });
+    });
+    queryList = queryList.filter(function (v, i, a) { return v && a.indexOf(v) === i; });
+
+    var fallback = []; // результаты без уверенного совпадения — предложим вручную
+
+    function searchWith(query) {
+      return searchSite(query).then(function (list) {
+        if (!list.length) return [];
+        list.forEach(function (it) { it._score = scoreResult(it, query, wantSeason); });
+        list.sort(function (x, y) { return y._score - x._score; });
+        var good = list.filter(function (it) { return it._score >= 25; });
+        if (!good.length && !fallback.length) fallback = list.slice(0, 5);
+        return good;
+      }).catch(function () { return []; });
+    }
+
+    function searchSequence(queries) {
+      var chain = Promise.resolve([]);
+      (queries || []).forEach(function (q) {
+        chain = chain.then(function (found) {
+          if (found && found.length) return found;
+          return searchWith(q);
         });
       });
-    });
-    return chain;
+      return chain;
+    }
+
+    return searchSequence(queryList)
+      .then(function (found) {
+        if (found.length) return found;
+        // не нашли по названию карточки — пробуем синонимы из Shikimori
+        return shikimoriQueries(movie).then(function (alt) {
+          var altList = [];
+          alt.forEach(function (n) {
+            altList.push(n);
+            derivedQueries(n).forEach(function (d) { altList.push(d); });
+          });
+          return searchSequence(altList.filter(function (v, i, a) { return v && a.indexOf(v) === i; }));
+        });
+      })
+      .then(function (found) {
+        return found.length ? found : fallback;
+      });
   }
 
   /* ==================== СТРАНИЦА ТАЙТЛА / ПЛЕЙЛИСТ ==================== */
@@ -568,6 +659,14 @@ this.renderList = function () {
       playerRow.on('hover:enter', function () { self.choosePlayer(); });
       self.appendItem(playerRow);
 
+      // строка: ручной поиск (если название на сайте отличается)
+      var searchRow = $(Lampa.Template.get('animejoy_row', {
+        title: 'Поиск вручную',
+        quality: 'Введите название, как оно на animejoy'
+      }));
+      searchRow.on('hover:enter', function () { self.searchManual(); });
+      self.appendItem(searchRow);
+
       // серии
       player.episodes.forEach(function (ep, idx) {
         var item = $(Lampa.Template.get('animejoy_item', {
@@ -581,6 +680,41 @@ this.renderList = function () {
         item.on('hover:enter', function () { self.play(idx); });
         self.appendItem(item);
       });
+    };
+
+    this.searchManual = function () {
+      var self = this;
+      var current = state.title ? state.title.title.replace(/\s*\[[^\]]*\]\s*$/, '') : '';
+
+      var run = function (query) {
+        if (!query || !query.trim()) return;
+        query = query.trim();
+        self.activity.loader(true);
+        searchSite(query).then(function (list) {
+          self.activity.loader(false);
+          if (!list.length) {
+            Lampa.Noty.show('По запросу «' + query + '» ничего не найдено');
+            return;
+          }
+          list.forEach(function (it) { it._score = scoreResult(it, query, 0); });
+          list.sort(function (x, y) { return y._score - x._score; });
+          state.titles = list;
+          state.title = list[0];
+          self.loadTitle();
+        }).catch(function (e) {
+          self.activity.loader(false);
+          Lampa.Noty.show('Ошибка поиска: ' + (e.message || ''));
+        });
+      };
+
+      if (Lampa.Input && Lampa.Input.edit) {
+        Lampa.Input.edit({ free: true, nosave: true, value: current, title: 'Поиск на ' + domain() }, function (value) {
+          Lampa.Controller.toggle('content');
+          run(value);
+        });
+      } else {
+        Lampa.Noty.show('Ручной поиск недоступен в этой версии Lampa');
+      }
     };
 
     this.chooseTitle = function () {
@@ -896,6 +1030,8 @@ this.play = function (idx) {
     playerKind: playerKind,
     pickQuality: pickQuality,
     normTitle: normTitle,
+    homoglyph: homoglyph,
+    derivedQueries: derivedQueries,
     seasonOf: seasonOf,
     scoreResult: scoreResult,
     buildPlayersFromPlaylist: buildPlayersFromPlaylist
