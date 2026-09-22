@@ -446,29 +446,48 @@
         .catch(function (e) { self.empty(e.message || String(e)); });
     };
 
-    // Собрать структуру: плееры -> серии (имена плееров из типа ссылки, не из списков)
+    // Собрать структуру: группы (фансаб) x плееры -> серии.
+    // dataId вида "группа_плеер", Kodik — одна ссылка на весь сериал, поэтому
+    // группируем по полному пути без последнего сегмента и скрываем неподдерживаемое.
     this.buildPlayers = function (pl) {
-      var byPlayer = {};
+      var byKey = {};
       pl.videos.forEach(function (v) {
         var parts = v.dataId.split('_');
-        var pIdx = parseInt(parts[parts.length - 1], 10);
-        if (!byPlayer[pIdx]) byPlayer[pIdx] = [];
-        byPlayer[pIdx].push(v);
+        var key = parts.slice(0, -1).join('_');
+        if (!byKey[key]) byKey[key] = {
+          groupIdx: parseInt(parts[0], 10) || 0,
+          pIdx: parseInt(parts[parts.length - 1], 10) || 0,
+          eps: []
+        };
+        byKey[key].eps.push(v);
       });
       var players = [];
-      Object.keys(byPlayer).forEach(function (k) {
-        var pIdx = parseInt(k, 10);
-        var meta = pl.players[pIdx] || {};
-        var eps = byPlayer[k];
+      Object.keys(byKey).forEach(function (key) {
+        var g = byKey[key];
+        var meta = pl.players[g.pIdx] || {};
+        var eps = g.eps;
         var kind = playerKind(meta.name, eps[0] && eps[0].file);
-        var name = KIND_NAMES[kind] || meta.name || ('Плеер ' + (pIdx + 1));
+        var name = KIND_NAMES[kind] || meta.name || ('Плеер ' + (g.pIdx + 1));
+        var group = pl.groups[g.groupIdx];
+        if (group && pl.groups.length > 1) name = group.name + ' · ' + name;
         eps.sort(function (a, b) {
           var na = parseInt(a.name, 10), nb = parseInt(b.name, 10);
           if (isNaN(na) || isNaN(nb)) return a.name.localeCompare(b.name);
           return na - nb;
         });
-        players.push({ name: name, kind: kind, episodes: eps });
+        players.push({
+          name: name,
+          kind: kind,
+          episodes: eps,
+          supported: kind !== 'kodik' && kind !== 'other'
+        });
       });
+      // поддерживаемые — вперёд
+      players.sort(function (a, b) { return (b.supported ? 1 : 0) - (a.supported ? 1 : 0); });
+      // если есть хоть один поддерживаемый — прячем Kodik/прочие
+      if (players.some(function (p) { return p.supported; })) {
+        players = players.filter(function (p) { return p.supported; });
+      }
       return players;
     };
 
@@ -793,16 +812,26 @@ this.play = function (idx) {
         });
       });
 
-      // разные версии интерфейса: пробуем несколько мест вставки
-      var anchor = render.find('.view--online').first();
-      if (anchor.length) {
-        anchor.after(btn);
+      // разные версии интерфейса: главное — попасть в .buttons--container,
+      // откуда кнопка «Смотреть» собирает список источников (как у онлайн-мода)
+      var torrent = render.find('.view--torrent').first();
+      if (torrent.length) {
+        torrent.after(btn);
       } else {
-        var box = render.find('.full-start__buttons').first();
-        if (!box.length) box = render.find('.full-start-new__buttons').first();
-        if (!box.length) box = render.find('.full-start').first();
-        if (box.length) box.append(btn);
-        else render.append(btn);
+        var container = render.find('.buttons--container').first();
+        if (container.length) {
+          var more = container.find('.view--trailer').first();
+          if (more.length) more.after(btn);
+          else container.append(btn);
+        } else {
+          var anchor = render.find('.view--online').first();
+          if (anchor.length) anchor.after(btn);
+          else {
+            var box = render.find('.full-start__buttons').first();
+            if (box.length) box.append(btn);
+            else render.append(btn);
+          }
+        }
       }
       console.log('AnimeJoy', 'button injected');
     } catch (err) {
