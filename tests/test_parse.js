@@ -27,8 +27,13 @@ global.document = {
   createElement: () => ({ appendChild: () => {}, type: '' }),
   head: { appendChild: () => {} }
 };
+const storageMemory = {};
 global.Lampa = {
-  Storage: { get: (k, d) => d },
+  Storage: {
+    get: (k, d) => Object.prototype.hasOwnProperty.call(storageMemory, k) ? storageMemory[k] : d,
+    set: (k, v) => { storageMemory[k] = v; }
+  },
+  Utils: { hash: value => String(value).split('').reduce((n, ch) => ((n * 31) + ch.charCodeAt(0)) | 0, 0) },
   Listener: { follow: () => {} },
   Component: { add: () => {} },
   SettingsApi: null
@@ -249,6 +254,16 @@ function encodeKodikSource(value) {
 }
 const hls = 'https://cloud.kodik-storage.com/video/720.mp4:hls:manifest.m3u8';
 check('Kodik: зашифрованный HLS декодируется', dbg.decodeKodikSource(encodeKodikSource(hls)) === hls);
+
+// ---------- 12. Сохранение выбранного тайтла и серии ----------
+console.log('== сохранение выбора ==');
+const movieCard = { id: 46260, media_type: 'tv', name: 'Наруто' };
+const selectedTitle = { id: '3249', url: 'https://animejoya.ru/tv-serialy/3249-naruto.html', title: 'Наруто [220 из 220]' };
+dbg.saveTitleFor(movieCard, selectedTitle);
+check('выбранный тайтл читается из объектного Lampa.Storage', dbg.savedTitleFor(movieCard).id === '3249');
+dbg.savePlaybackFor(movieCard, selectedTitle, { kind: 'kodik' }, { name: '37 серия' });
+const savedPlayback = dbg.savedPlaybackFor(movieCard, '3249');
+check('последняя серия и плеер сохраняются', savedPlayback.episode === '37 серия' && savedPlayback.playerKind === 'kodik');
 
 console.log('\nИтого: ' + passed + ' OK, ' + failed + ' FAIL');
 process.exit(failed ? 1 : 0);

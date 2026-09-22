@@ -10,11 +10,11 @@
   window.animejoy_plugin_loaded = true;
 
   var PLUGIN_TITLE = 'AnimeJoy';
-  var PLUGIN_VERSION = '1.5.0';
+  var PLUGIN_VERSION = '1.6.0';
   var DEFAULT_DOMAIN = 'https://animejoya.ru';
 
   // безопасный доступ к хранилищу (совместимость со старыми сборками Lampa)
-  function storageGet(key, def) {
+  function storageRaw(key, def) {
     var v;
     try {
       if (Lampa.Storage && typeof Lampa.Storage.get === 'function') v = Lampa.Storage.get(key, def);
@@ -23,6 +23,11 @@
       v = def;
     }
     if (v === null || v === undefined) return def;
+    return v;
+  }
+
+  function storageGet(key, def) {
+    var v = storageRaw(key, def);
     return typeof v === 'string' ? v : String(v);
   }
 
@@ -35,11 +40,22 @@
 
   function storageMap(key) {
     try {
-      var value = JSON.parse(storageGet(key, '{}'));
+      var value = storageRaw(key, {});
+      if (typeof value === 'string') value = JSON.parse(value || '{}');
       return value && typeof value === 'object' ? value : {};
     } catch (e) {
       return {};
     }
+  }
+
+  function storageSetMap(key, value) {
+    try {
+      if (Lampa.Storage && typeof Lampa.Storage.set === 'function') {
+        Lampa.Storage.set(key, value);
+        return;
+      }
+    } catch (e) {}
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
   }
 
   function movieKey(movie) {
@@ -58,7 +74,7 @@
     if (!title || !title.id || !title.url) return;
     var choices = storageMap('animejoy_title_choices');
     choices[movieKey(movie)] = { id: title.id, url: title.url, title: title.title };
-    storageSet('animejoy_title_choices', JSON.stringify(choices));
+    storageSetMap('animejoy_title_choices', choices);
   }
 
   function savedPlaybackFor(movie, titleId) {
@@ -75,7 +91,7 @@
       playerKind: player.kind,
       episode: episode.name
     };
-    storageSet('animejoy_last_playback', JSON.stringify(playback));
+    storageSetMap('animejoy_last_playback', playback);
     saveTitleFor(movie, title);
   }
 
@@ -1409,13 +1425,19 @@ this.play = function (idx) {
       if (!render || !render.length || render.find('.view--animejoy').length) return;
       if (!e.data || !e.data.movie) return;
 
+      var movieData = $.extend ? $.extend({}, e.data.movie) : e.data.movie;
+      if (!movieData.number_of_episodes && e.data.episodes) {
+        var episodeList = e.data.episodes.episodes_original || e.data.episodes.episodes || [];
+        if (episodeList.length) movieData.number_of_episodes = episodeList.length;
+      }
+
       var btn = $('<div class="full-start__button selector view--animejoy" data-subtitle="Субтитры с animejoya.ru">' + ICON_SVG + '<span>' + PLUGIN_TITLE + '</span></div>');
       btn.on('hover:enter', function () {
         Lampa.Activity.push({
           url: '',
           component: 'animejoy_online',
           title: PLUGIN_TITLE,
-          movie: e.data.movie,
+          movie: movieData,
           page: 1
         });
       });
@@ -1475,6 +1497,10 @@ this.play = function (idx) {
     normTitle: normTitle,
     romanTitle: romanTitle,
     exactTitle: exactTitle,
+    savedTitleFor: savedTitleFor,
+    saveTitleFor: saveTitleFor,
+    savedPlaybackFor: savedPlaybackFor,
+    savePlaybackFor: savePlaybackFor,
     homoglyph: homoglyph,
     derivedQueries: derivedQueries,
     seasonOf: seasonOf,
