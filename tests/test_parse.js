@@ -78,7 +78,8 @@ check('Kodik по имени', dbg.playerKind('Kodik', 'https://kodikplayer.com/
 check('CDA по ссылке', dbg.playerKind('CDA', 'https://ebd.cda.pl/620x395/962595098') === 'cda');
 check('AllVideo по fsst', dbg.playerKind('AllVideo', 'https://fsst.online/embed/751041/') === 'allvideo');
 check('Sibnet', dbg.playerKind('Sibnet', 'https://iv.sibnet.ru/shell.php?videoid=1') === 'sibnet');
-check('автоприоритет: CDA, AllVideo, Kodik, Sibnet', dbg.playerPriority().join(',') === 'cda,allvideo,kodik,sibnet');
+check('Mail.ru определяется как «Наш плеер»', dbg.playerKind('Mail', 'https://my.mail.ru/video/embed/1') === 'mail');
+check('автоприоритет включает «Наш плеер»', dbg.playerPriority().join(',') === 'cda,allvideo,kodik,mail,sibnet');
 
 // ---------- 3. AllVideo: реальный embed (incvideo) ----------
 console.log('== AllVideo regex (реальный incvideo.html) ==');
@@ -163,6 +164,29 @@ const single = dbg.buildPlayersFromPlaylist({
 });
 check('одиночный dataId -> один плеер с серией', single.length === 1 && single[0].episodes.length === 1);
 
+// старые длинные сериалы: первый уровень — источники, второй — диапазоны серий
+const nestedPlayers = dbg.buildPlayersFromPlaylist({
+  groups: [
+    { id: '0_0', name: 'Sibnet' },
+    { id: '0_1', name: 'Mail' },
+    { id: '0_2', name: 'Kodik' }
+  ],
+  players: [
+    { id: '0_0_0', name: '1-10' },
+    { id: '0_0_1', name: '11-20' }
+  ],
+  videos: [
+    { file: 'https://iv.sibnet.ru/shell.php?videoid=1', dataId: '0_0_0', name: '1' },
+    { file: 'https://iv.sibnet.ru/shell.php?videoid=2', dataId: '0_0_1', name: '11' },
+    { file: 'https://my.mail.ru/video/embed/1', dataId: '0_1_0', name: '1' },
+    { file: 'https://my.mail.ru/video/embed/2', dataId: '0_1_1', name: '11' },
+    { file: 'https://kodikplayer.com/serial/1/hash/720p', dataId: '0_2', name: '-' }
+  ]
+});
+check('диапазоны старого сериала объединяются по источнику', nestedPlayers.length === 3);
+check('Sibnet: серии из разных диапазонов объединены', nestedPlayers.find(p => p.kind === 'sibnet').episodes.length === 2);
+check('«Наш плеер»: Mail-серии объединены и поддерживаются', nestedPlayers.some(p => p.kind === 'mail' && p.supported && p.episodes.length === 2));
+
 // ---------- 9. Расхождение названий (латинские двойники + лишние слова) ----------
 console.log('== названия TMDB vs animejoy ==');
 const homoglyphTitle = 'Pacxититeль гpoбниц [11 из 12]';
@@ -213,6 +237,8 @@ const narutoJapanese = dbg.rankSearchResults([
   { id: 'main', title: 'Наруто [220 из 220]' }
 ], 'ナルト', 0, 220);
 check('число серий карточки помогает при японском названии', narutoJapanese[0] && narutoJapanese[0].id === 'main');
+check('японское Shippuden совпадает с «Ураганными хрониками»',
+  dbg.exactTitle('Наруто: Ураганные хроники [500 из 500]', 'NARUTO -ナルト- 疾風伝'));
 
 const complete = dbg.episodeProgress('Наруто [220 из 220]');
 const ongoing = dbg.episodeProgress('Боруто [280 из 300]');

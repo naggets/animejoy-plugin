@@ -10,7 +10,7 @@
   window.animejoy_plugin_loaded = true;
 
   var PLUGIN_TITLE = 'AnimeJoy';
-  var PLUGIN_VERSION = '1.6.0';
+  var PLUGIN_VERSION = '1.7.0';
   var DEFAULT_DOMAIN = 'https://animejoya.ru';
 
   // безопасный доступ к хранилищу (совместимость со старыми сборками Lampa)
@@ -109,7 +109,7 @@
 
   function playerPriority() {
     var p = storageGet('animejoy_player', 'cda');
-    var all = [p, 'cda', 'allvideo', 'kodik', 'sibnet'];
+    var all = [p, 'cda', 'allvideo', 'kodik', 'mail', 'sibnet'];
     return all.filter(function (v, i) { return all.indexOf(v) === i; });
   }
 
@@ -238,7 +238,9 @@
   function romanTitle(t) {
     var raw = String(t || '').toLowerCase()
       .replace(/\[.*?\]/g, ' ')
-      .replace(/\(.*?\)/g, ' ');
+      .replace(/\(.*?\)/g, ' ')
+      .replace(/ナルト/g, ' naruto ')
+      .replace(/疾風伝/g, ' shippuden ');
     if (/[а-яё]/i.test(raw)) raw = homoglyph(raw);
     return raw.replace(/[а-яёѕ]/g, function (ch) { return CYR_TO_LAT[ch] || ch; })
       .replace(/[^a-z0-9]+/g, ' ')
@@ -248,6 +250,10 @@
 
   function titleForms(t) {
     var forms = [normTitle(t), romanTitle(t)];
+    var source = String(t || '').toLowerCase();
+    if ((/疾風伝|shippu+den/.test(source)) && (/ナルト|naruto/.test(source))) {
+      forms.push('naruto uragannye hroniki');
+    }
     return forms.filter(function (v, i, a) { return v && a.indexOf(v) === i; });
   }
 
@@ -554,6 +560,7 @@
     if (s.indexOf('allvideo') !== -1 || s.indexOf('fsst.') !== -1 || s.indexOf('incvideo') !== -1) return 'allvideo';
     if (s.indexOf('sibnet') !== -1) return 'sibnet';
     if (s.indexOf('kodik') !== -1) return 'kodik';
+    if (s.indexOf('my.mail.ru') !== -1 || /(?:^|\s)mail(?:\s|$)/.test(s) || s.indexOf('наш плеер') !== -1) return 'mail';
     return 'other';
   }
 
@@ -602,6 +609,28 @@
       if (url.indexOf('//') === 0) url = 'https:' + url;
       else if (url.charAt(0) === '/') url = 'https://iv.sibnet.ru' + url;
       return { url: url, quality: {} };
+    });
+  }
+
+  // ---- «Наш плеер» AnimeJoy (Mail.ru): публичный meta API -> mp4 ----
+  function extractMail(embedUrl) {
+    var m = /my\.mail\.ru\/video\/embed\/(\d+)/i.exec(embedUrl || '');
+    if (!m) return Promise.reject(new Error('Наш плеер: не распознан ID видео'));
+    return request('https://my.mail.ru/+/video/meta/' + m[1], {
+      headers: { 'Referer': embedUrl }
+    }).then(function (res) {
+      var json = parseMaybeJson(res.data);
+      var videos = json && json.videos;
+      if (!videos || !videos.length) throw new Error('Наш плеер: потоки не найдены');
+      var quality = {};
+      videos.forEach(function (video) {
+        if (!video.url) return;
+        var url = video.url.indexOf('//') === 0 ? 'https:' + video.url : video.url;
+        var key = String(video.key || '').replace(/p$/i, '') + 'p';
+        quality[key] = url;
+      });
+      if (!Object.keys(quality).length) throw new Error('Наш плеер: ссылки не найдены');
+      return { quality: quality };
     });
   }
 
@@ -808,6 +837,7 @@
     if (kind === 'allvideo') return extractAllVideo(entry.file);
     if (kind === 'sibnet') return extractSibnet(entry.file);
     if (kind === 'kodik') return extractKodik(entry);
+    if (kind === 'mail') return extractMail(entry.file);
     return Promise.reject(new Error('Неизвестный плеер'));
   }
 
@@ -834,7 +864,7 @@
     '</div>');
   } catch (e) { console.log('AnimeJoy', 'template error:', e.message); }
 
-  var KIND_NAMES = { cda: 'CDA', allvideo: 'AllVideo', sibnet: 'Sibnet', kodik: 'Kodik' };
+  var KIND_NAMES = { cda: 'CDA', allvideo: 'AllVideo', sibnet: 'Sibnet', kodik: 'Kodik', mail: 'Наш плеер (Mail.ru)' };
 
   // Группировка плейлиста в список плееров.
   // data-id у animejoy: у группы "0_0", у видео "0_0_1" (последний сегмент — плеер),
@@ -842,11 +872,19 @@
   function buildPlayersFromPlaylist(pl) {
     var groups = pl.groups || [];
     var playersMeta = pl.players || [];
+    // В старых длинных сериалах первый уровень содержит сразу источники
+    // (Sibnet/Mail/Kodik), а следующий — диапазоны серий 1-10, 11-20...
+    var sourceMeta = groups.concat(playersMeta).filter(function (item) {
+      return playerKind(item.name, '') !== 'other';
+    });
+    var translationGroups = groups.filter(function (item) {
+      return playerKind(item.name, '') === 'other';
+    });
 
     function groupOf(dataId) {
       var found = null;
       var id = String(dataId || '');
-      groups.forEach(function (g) {
+      translationGroups.forEach(function (g) {
         var gid = String(g.id || '');
         if (!gid) return;
         if (id === gid || id.indexOf(gid + '_') === 0) {
@@ -856,21 +894,25 @@
       return found;
     }
 
-    function metaOf(dataId) {
+    function sourceOf(dataId) {
       var id = String(dataId || '');
       var found = null;
-      playersMeta.forEach(function (p) {
-        if (String(p.id) === id) found = p;
+      sourceMeta.forEach(function (p) {
+        var pid = String(p.id || '');
+        if (id === pid || id.indexOf(pid + '_') === 0) {
+          if (!found || pid.length > String(found.id).length) found = p;
+        }
       });
-      return found || {};
+      return found;
     }
 
     var byKey = {};
     var order = [];
     (pl.videos || []).forEach(function (v) {
-      var key = String(v.dataId || '');
+      var source = sourceOf(v.dataId);
+      var key = source ? ('source:' + source.id) : String(v.dataId || '');
       if (!byKey[key]) {
-        byKey[key] = { eps: [], sample: v };
+        byKey[key] = { eps: [], sample: v, meta: source || {} };
         order.push(key);
       }
       byKey[key].eps.push(v);
@@ -880,11 +922,11 @@
     order.forEach(function (key) {
       var bucket = byKey[key];
       var eps = bucket.eps;
-      var meta = metaOf(key);
+      var meta = bucket.meta;
       var kind = playerKind(meta.name, eps[0] && eps[0].file);
       var name = KIND_NAMES[kind] || meta.name || ('Плеер ' + (order.indexOf(key) + 1));
-      var group = groupOf(key);
-      if (group && groups.length > 1) name = group.name + ' · ' + name;
+      var group = groupOf(bucket.sample.dataId);
+      if (group && translationGroups.length > 1) name = group.name + ' · ' + name;
 
       eps.sort(function (a, b) {
         var na = parseInt(a.name, 10), nb = parseInt(b.name, 10);
@@ -1402,7 +1444,7 @@ this.play = function (idx) {
       component: 'animejoy',
       param: {
         name: 'animejoy_player', type: 'select', default: 'cda',
-        values: { auto: 'Авто', cda: 'CDA', allvideo: 'AllVideo', kodik: 'Kodik', sibnet: 'Sibnet' }
+        values: { auto: 'Авто', cda: 'CDA', allvideo: 'AllVideo', kodik: 'Kodik', mail: 'Наш плеер (Mail.ru)', sibnet: 'Sibnet' }
       },
       field: { name: 'Приоритет плеера', description: 'Какой плеер выбирать по умолчанию (Sibnet может требовать РФ-IP)' }
     });
