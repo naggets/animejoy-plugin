@@ -1,5 +1,22 @@
 // Тесты парсеров плагина animejoy.js на реальных данных, снятых с сайта
 const fs = require('fs');
+const path = require('path');
+
+// работаем и из корня проекта, и из папки tests/
+const pluginPath = fs.existsSync(path.join(__dirname, 'animejoy.js'))
+  ? path.join(__dirname, 'animejoy.js')
+  : path.join(__dirname, '..', 'animejoy.js');
+
+function fixture(name) {
+  const candidates = [
+    path.join(__dirname, 'fixtures', name),
+    path.join(__dirname, '..', 'fixtures', name),
+    path.join(__dirname, '..', 'tests', 'fixtures', name),
+    path.join(__dirname, '..', name)
+  ];
+  for (const c of candidates) if (fs.existsSync(c)) return c;
+  throw new Error('fixture not found: ' + name);
+}
 
 // --- Стабы окружения Lampa ---
 global.window = {};
@@ -16,7 +33,7 @@ global.Lampa = {
 };
 global.$ = {};
 
-require('./animejoy.js');
+require(pluginPath);
 
 const dbg = global.window.animejoy_debug;
 if (!dbg) { console.error('FAIL: animejoy_debug не экспортирован'); process.exit(1); }
@@ -29,7 +46,7 @@ function check(name, cond) {
 
 // ---------- 1. Парсинг плейлиста (реальный ответ playlists.php) ----------
 console.log('== parsePlaylist ==');
-const plJson = JSON.parse(fs.readFileSync('playlists2.json', 'utf8'));
+const plJson = JSON.parse(fs.readFileSync(fixture('playlists.json'), 'utf8'));
 const pl = dbg.parsePlaylist(plJson.response);
 
 check('группа AL найдена', pl.groups.length === 1 && pl.groups[0].name === 'AL');
@@ -57,7 +74,7 @@ check('Sibnet', dbg.playerKind('Sibnet', 'https://iv.sibnet.ru/shell.php?videoid
 
 // ---------- 3. AllVideo: реальный embed (incvideo) ----------
 console.log('== AllVideo regex (реальный incvideo.html) ==');
-const inc = fs.readFileSync('incvideo.html', 'utf8');
+const inc = fs.readFileSync(fixture('incvideo.html'), 'utf8');
 const fm = /file:\s*"([^"]+)"/.exec(inc);
 check('file: найден', !!fm);
 const q = {};
@@ -70,7 +87,7 @@ check('720p — mp4', q['720p'] && q['720p'].includes('.mp4'));
 
 // ---------- 4. CDA API (реальный cda_api.json) ----------
 console.log('== CDA API ==');
-const cda = JSON.parse(fs.readFileSync('cda_api.json', 'utf8'));
+const cda = JSON.parse(fs.readFileSync(fixture('cda_api.json'), 'utf8'));
 const cq = {};
 (cda.video.qualities || []).forEach(x => { if (x.file) cq[x.name] = x.file; });
 check('4 качества', Object.keys(cq).length === 4);
