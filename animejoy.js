@@ -10,7 +10,7 @@
   window.animejoy_plugin_loaded = true;
 
   var PLUGIN_TITLE = 'AnimeJoy';
-  var PLUGIN_VERSION = '1.8.0';
+  var PLUGIN_VERSION = '1.9.0';
   var DEFAULT_DOMAIN = 'https://animejoya.ru';
 
   // безопасный доступ к хранилищу (совместимость со старыми сборками Lampa)
@@ -115,7 +115,7 @@
 
   function playerPriority() {
     var p = storageGet('animejoy_player', 'cda');
-    var all = [p, 'cda', 'allvideo', 'kodik', 'mail', 'sibnet'];
+    var all = [p, 'cda', 'animejoy', 'allvideo', 'kodik', 'mail', 'sibnet'];
     return all.filter(function (v, i) { return all.indexOf(v) === i; });
   }
 
@@ -562,11 +562,12 @@
   // определить тип плеера по имени или по ссылке
   function playerKind(name, url) {
     var s = ((name || '') + ' ' + (url || '')).toLowerCase();
+    if (s.indexOf('animejoya.ru/player/playerjs.html') !== -1 || s.indexOf('наш плеер') !== -1) return 'animejoy';
     if (s.indexOf('ebd.cda.pl') !== -1 || s.indexOf('cda.pl') !== -1 || /\bcda\b/.test(s)) return 'cda';
     if (s.indexOf('allvideo') !== -1 || s.indexOf('fsst.') !== -1 || s.indexOf('incvideo') !== -1) return 'allvideo';
     if (s.indexOf('sibnet') !== -1) return 'sibnet';
     if (s.indexOf('kodik') !== -1) return 'kodik';
-    if (s.indexOf('my.mail.ru') !== -1 || /(?:^|\s)mail(?:\s|$)/.test(s) || s.indexOf('наш плеер') !== -1) return 'mail';
+    if (s.indexOf('my.mail.ru') !== -1 || /(?:^|\s)mail(?:\s|$)/.test(s)) return 'mail';
     return 'other';
   }
 
@@ -618,16 +619,16 @@
     });
   }
 
-  // ---- «Наш плеер» AnimeJoy (Mail.ru): публичный meta API -> mp4 ----
+  // ---- Mail.ru: публичный meta API -> mp4 ----
   function extractMail(embedUrl) {
     var m = /my\.mail\.ru\/video\/embed\/(\d+)/i.exec(embedUrl || '');
-    if (!m) return Promise.reject(new Error('Наш плеер: не распознан ID видео'));
+    if (!m) return Promise.reject(new Error('Mail.ru: не распознан ID видео'));
     return request('https://my.mail.ru/+/video/meta/' + m[1], {
       headers: { 'Referer': embedUrl }
     }).then(function (res) {
       var json = parseMaybeJson(res.data);
       var videos = json && json.videos;
-      if (!videos || !videos.length) throw new Error('Наш плеер: потоки не найдены');
+      if (!videos || !videos.length) throw new Error('Mail.ru: потоки не найдены');
       var quality = {};
       videos.forEach(function (video) {
         if (!video.url) return;
@@ -635,9 +636,32 @@
         var key = String(video.key || '').replace(/p$/i, '') + 'p';
         quality[key] = url;
       });
-      if (!Object.keys(quality).length) throw new Error('Наш плеер: ссылки не найдены');
+      if (!Object.keys(quality).length) throw new Error('Mail.ru: ссылки не найдены');
       return { quality: quality };
     });
+  }
+
+  // ---- Собственный плеер AnimeJoy: file=[1080p]url,[720p]url ----
+  function parseAnimeJoyFiles(embedUrl) {
+    var m = /[?&]file=([^&]+)/i.exec(String(embedUrl || '').replace(/&amp;/g, '&'));
+    if (!m) return {};
+    var files;
+    try { files = decodeURIComponent(m[1]); } catch (e) { files = m[1]; }
+    var quality = {};
+    var re = /\[(\d+p)\]\s*(https?:\/\/.*?)(?=,\[\d+p\]|$)/gi;
+    var found;
+    while ((found = re.exec(files))) quality[found[1]] = found[2];
+    if (!Object.keys(quality).length && /^https?:\/\//i.test(files)) {
+      var inferred = /(?:^|[-_/])(\d{3,4})p?(?:\.|[-_/])/i.exec(files);
+      quality[inferred ? inferred[1] + 'p' : '1080p'] = files;
+    }
+    return quality;
+  }
+
+  function extractAnimeJoy(embedUrl) {
+    var quality = parseAnimeJoyFiles(embedUrl);
+    if (!Object.keys(quality).length) return Promise.reject(new Error('Наш плеер: ссылки не распознаны'));
+    return Promise.resolve({ quality: quality });
   }
 
   // ---- Kodik: страница сериала -> ID серий -> /ftor -> HLS ----
@@ -844,6 +868,7 @@
     if (kind === 'sibnet') return extractSibnet(entry.file);
     if (kind === 'kodik') return extractKodik(entry);
     if (kind === 'mail') return extractMail(entry.file);
+    if (kind === 'animejoy') return extractAnimeJoy(entry.file);
     return Promise.reject(new Error('Неизвестный плеер'));
   }
 
@@ -870,7 +895,14 @@
     '</div>');
   } catch (e) { console.log('AnimeJoy', 'template error:', e.message); }
 
-  var KIND_NAMES = { cda: 'CDA', allvideo: 'AllVideo', sibnet: 'Sibnet', kodik: 'Kodik', mail: 'Наш плеер (Mail.ru)' };
+  var KIND_NAMES = {
+    cda: 'CDA',
+    animejoy: 'Наш плеер',
+    allvideo: 'AllVideo',
+    sibnet: 'Sibnet',
+    kodik: 'Kodik',
+    mail: 'Mail.ru'
+  };
 
   // Группировка плейлиста в список плееров.
   // data-id у animejoy: у группы "0_0", у видео "0_0_1" (последний сегмент — плеер),
@@ -1450,7 +1482,7 @@ this.play = function (idx) {
       component: 'animejoy',
       param: {
         name: 'animejoy_player', type: 'select', default: 'cda',
-        values: { auto: 'Авто', cda: 'CDA', allvideo: 'AllVideo', kodik: 'Kodik', mail: 'Наш плеер (Mail.ru)', sibnet: 'Sibnet' }
+        values: { auto: 'Авто', cda: 'CDA', animejoy: 'Наш плеер', allvideo: 'AllVideo', kodik: 'Kodik', mail: 'Mail.ru', sibnet: 'Sibnet' }
       },
       field: { name: 'Приоритет плеера', description: 'Какой плеер выбирать по умолчанию (Sibnet может требовать РФ-IP)' }
     });
@@ -1557,6 +1589,7 @@ this.play = function (idx) {
     rankSearchResults: rankSearchResults,
     parseKodikPage: parseKodikPage,
     decodeKodikSource: decodeKodikSource,
+    parseAnimeJoyFiles: parseAnimeJoyFiles,
     buildPlayersFromPlaylist: buildPlayersFromPlaylist
   };
 

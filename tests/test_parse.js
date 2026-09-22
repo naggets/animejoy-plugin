@@ -78,8 +78,10 @@ check('Kodik по имени', dbg.playerKind('Kodik', 'https://kodikplayer.com/
 check('CDA по ссылке', dbg.playerKind('CDA', 'https://ebd.cda.pl/620x395/962595098') === 'cda');
 check('AllVideo по fsst', dbg.playerKind('AllVideo', 'https://fsst.online/embed/751041/') === 'allvideo');
 check('Sibnet', dbg.playerKind('Sibnet', 'https://iv.sibnet.ru/shell.php?videoid=1') === 'sibnet');
-check('Mail.ru определяется как «Наш плеер»', dbg.playerKind('Mail', 'https://my.mail.ru/video/embed/1') === 'mail');
-check('автоприоритет включает «Наш плеер»', dbg.playerPriority().join(',') === 'cda,allvideo,kodik,mail,sibnet');
+check('Mail.ru определяется отдельно', dbg.playerKind('Mail', 'https://my.mail.ru/video/embed/1') === 'mail');
+check('собственный источник определяется как «Наш плеер»',
+  dbg.playerKind('Наш плеер', 'https://animejoya.ru/player/playerjs.html?file=x') === 'animejoy');
+check('автоприоритет включает собственный плеер', dbg.playerPriority().join(',') === 'cda,animejoy,allvideo,kodik,mail,sibnet');
 
 // ---------- 3. AllVideo: реальный embed (incvideo) ----------
 console.log('== AllVideo regex (реальный incvideo.html) ==');
@@ -185,7 +187,13 @@ const nestedPlayers = dbg.buildPlayersFromPlaylist({
 });
 check('диапазоны старого сериала объединяются по источнику', nestedPlayers.length === 3);
 check('Sibnet: серии из разных диапазонов объединены', nestedPlayers.find(p => p.kind === 'sibnet').episodes.length === 2);
-check('«Наш плеер»: Mail-серии объединены и поддерживаются', nestedPlayers.some(p => p.kind === 'mail' && p.supported && p.episodes.length === 2));
+check('Mail.ru: серии объединены и поддерживаются', nestedPlayers.some(p => p.kind === 'mail' && p.supported && p.episodes.length === 2));
+
+const ownFiles = dbg.parseAnimeJoyFiles(
+  'https://animejoya.ru/player/playerjs.html?skip=10-20&file=' +
+  encodeURIComponent('[1080p]https://storage.example/a-1080.mp4,[720p]https://cdn.example/a-720.mp4')
+);
+check('«Наш плеер»: извлечены отдельные 1080p и 720p', ownFiles['1080p'] && ownFiles['720p']);
 
 // ---------- 9. Расхождение названий (латинские двойники + лишние слова) ----------
 console.log('== названия TMDB vs animejoy ==');
