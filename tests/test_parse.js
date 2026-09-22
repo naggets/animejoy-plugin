@@ -203,6 +203,12 @@ check('Naruto латиницей совпадает с «Наруто»', dbg.ex
 check('Naruto латиницей: 220 серий выше Boruto', narutoLatin[0] && narutoLatin[0].id === 'main');
 check('кириллица транслитерируется стабильно', dbg.romanTitle('Наруто: Ураганные хроники') === 'naruto uragannye hroniki');
 
+const narutoJapanese = dbg.rankSearchResults([
+  { id: 'boruto', title: 'Боруто: Новое поколение Наруто [293 из 293]' },
+  { id: 'main', title: 'Наруто [220 из 220]' }
+], 'ナルト', 0, 220);
+check('число серий карточки помогает при японском названии', narutoJapanese[0] && narutoJapanese[0].id === 'main');
+
 const complete = dbg.episodeProgress('Наруто [220 из 220]');
 const ongoing = dbg.episodeProgress('Боруто [280 из 300]');
 check('полный счётчик серий распознан', complete.complete && complete.total === 220);

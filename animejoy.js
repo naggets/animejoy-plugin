@@ -10,7 +10,7 @@
   window.animejoy_plugin_loaded = true;
 
   var PLUGIN_TITLE = 'AnimeJoy';
-  var PLUGIN_VERSION = '1.4.0';
+  var PLUGIN_VERSION = '1.5.0';
   var DEFAULT_DOMAIN = 'https://animejoya.ru';
 
   // безопасный доступ к хранилищу (совместимость со старыми сборками Lampa)
@@ -31,6 +31,52 @@
       if (Lampa.Storage && typeof Lampa.Storage.set === 'function') { Lampa.Storage.set(key, val); return; }
     } catch (e) {}
     try { localStorage.setItem(key, String(val)); } catch (e) {}
+  }
+
+  function storageMap(key) {
+    try {
+      var value = JSON.parse(storageGet(key, '{}'));
+      return value && typeof value === 'object' ? value : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function movieKey(movie) {
+    var type = movie && (movie.media_type || (movie.first_air_date ? 'tv' : 'movie')) || 'media';
+    var id = movie && movie.id;
+    return type + '_' + (id || Lampa.Utils.hash([
+      movie && (movie.original_name || movie.original_title || movie.name || movie.title) || ''
+    ].join('')));
+  }
+
+  function savedTitleFor(movie) {
+    return storageMap('animejoy_title_choices')[movieKey(movie)] || null;
+  }
+
+  function saveTitleFor(movie, title) {
+    if (!title || !title.id || !title.url) return;
+    var choices = storageMap('animejoy_title_choices');
+    choices[movieKey(movie)] = { id: title.id, url: title.url, title: title.title };
+    storageSet('animejoy_title_choices', JSON.stringify(choices));
+  }
+
+  function savedPlaybackFor(movie, titleId) {
+    var saved = storageMap('animejoy_last_playback')[movieKey(movie)];
+    return saved && String(saved.titleId) === String(titleId) ? saved : null;
+  }
+
+  function savePlaybackFor(movie, title, player, episode) {
+    var playback = storageMap('animejoy_last_playback');
+    playback[movieKey(movie)] = {
+      titleId: title.id,
+      title: title.title,
+      url: title.url,
+      playerKind: player.kind,
+      episode: episode.name
+    };
+    storageSet('animejoy_last_playback', JSON.stringify(playback));
+    saveTitleFor(movie, title);
   }
 
   /* ============================ НАСТРОЙКИ ============================ */
@@ -323,15 +369,19 @@
     return { current: current, total: total, complete: total > 0 && current === total };
   }
 
-  function rankSearchResults(list, query, wantSeason) {
+  function rankSearchResults(list, query, wantSeason, wantEpisodes) {
     return (list || []).map(function (item) {
       item._score = scoreResult(item, query, wantSeason);
       item._exact = exactTitle(item.title, query);
+      var progress = episodeProgress(item.title);
+      item._episodeMatch = Boolean(wantEpisodes && progress.total === wantEpisodes);
+      if (item._episodeMatch) item._score += 60;
       return item;
     }).sort(function (x, y) {
       // Полное совпадение всегда выше продолжений, OVA и фильмов — независимо
       // от порядка, в котором DLE вернул результаты.
       if (x._exact !== y._exact) return x._exact ? -1 : 1;
+      if (x._episodeMatch !== y._episodeMatch) return x._episodeMatch ? -1 : 1;
       if (y._score !== x._score) return y._score - x._score;
       var xe = episodeProgress(x.title);
       var ye = episodeProgress(y.title);
@@ -380,6 +430,7 @@
       .filter(function (v, i, a) { return v && a.indexOf(v) === i; });
 
     var wantSeason = seasonOf(movie.name || '') || seasonOf(movie.title || '');
+    var wantEpisodes = parseInt(movie.number_of_episodes, 10) || 0;
 
     var queryList = [];
     names.forEach(function (n) {
@@ -393,7 +444,7 @@
     function searchWith(query) {
       return searchSite(query).then(function (list) {
         if (!list.length) return [];
-        rankSearchResults(list, query, wantSeason);
+        rankSearchResults(list, query, wantSeason, wantEpisodes);
         var good = list.filter(function (it) { return it._score >= 25; });
         if (!good.length && !fallback.length) fallback = list.slice(0, 5);
         return good;
@@ -871,9 +922,14 @@
 
     this.load = function () {
       var self = this;
+      var savedTitle = savedTitleFor(movie);
       ensureAuth()
         .then(function () { return findTitle(movie); })
         .then(function (titles) {
+          if (savedTitle) {
+            titles = titles.filter(function (title) { return String(title.id) !== String(savedTitle.id); });
+            titles.unshift(savedTitle);
+          }
           if (!titles.length) throw new Error('Тайтл «' + (movie.name || movie.title || '') + '» не найден на ' + domain());
           state.titles = titles;
           state.title = titles[0];
@@ -894,6 +950,15 @@
           state.players = players;
           if (!state.players.length) throw new Error('В плейлисте нет серий');
           state.playerIdx = self.defaultPlayerIdx();
+          var saved = savedPlaybackFor(movie, state.title.id);
+          if (saved && saved.playerKind) {
+            for (var i = 0; i < state.players.length; i++) {
+              if (state.players[i].kind === saved.playerKind && state.players[i].supported) {
+                state.playerIdx = i;
+                break;
+              }
+            }
+          }
           self.renderList();
           self.activity.loader(false);
           self.activity.toggle();
@@ -933,13 +998,46 @@
       });
       scroll.append(item);
     };
+
+    this.resumeEpisodeIndex = function (player) {
+      var episodes = player.episodes || [];
+      var saved = savedPlaybackFor(movie, state.title.id);
+      var index = -1;
+
+      if (saved && saved.episode) {
+        for (var i = 0; i < episodes.length; i++) {
+          if (String(episodes[i].name) === String(saved.episode)) {
+            index = i;
+            break;
+          }
+        }
+      }
+
+      // Если локальная запись выбора отсутствует, восстанавливаемся по Timeline.
+      if (index < 0) {
+        for (var j = 0; j < episodes.length; j++) {
+          var progress = Lampa.Timeline.view(this.episodeHash(episodes[j]));
+          if (progress.percent > 0) index = j;
+        }
+      }
+
+      if (index >= 0) {
+        var current = Lampa.Timeline.view(this.episodeHash(episodes[index]));
+        if (current.percent >= 90 && index + 1 < episodes.length) index++;
+      }
+      return index;
+    };
+
 this.renderList = function () {
       var self = this;
       var player = state.players[state.playerIdx];
       var unsupported = !player.supported ? ' — ' + (player.loadError || 'не поддерживается') : '';
+      var resumeIndex = self.resumeEpisodeIndex(player);
+      var resumeItem = null;
 
       scroll.render().find('.empty').remove();
       scroll.clear();
+      last = null;
 
       // строка: выбор тайтла
       var titleRow = $(Lampa.Template.get('animejoy_row', {
@@ -977,7 +1075,12 @@ this.renderList = function () {
 
         item.on('hover:enter', function () { self.play(idx); });
         self.appendItem(item);
+        if (idx === resumeIndex) {
+          resumeItem = item;
+          last = item[0];
+        }
       });
+      if (resumeItem) scroll.update(resumeItem, true);
     };
 
     this.searchManual = function () {
@@ -997,6 +1100,7 @@ this.renderList = function () {
           rankSearchResults(list, query, 0);
           state.titles = list;
           state.title = list[0];
+          saveTitleFor(movie, state.title);
           self.loadTitle();
         }).catch(function (e) {
           self.activity.loader(false);
@@ -1027,6 +1131,7 @@ this.renderList = function () {
         }),
         onSelect: function (item) {
           state.title = state.titles[item.index];
+          saveTitleFor(movie, state.title);
           self.loadTitle();
         },
         onBack: function () { Lampa.Controller.toggle('content'); }
@@ -1089,12 +1194,30 @@ this.play = function (idx) {
       // если серий немного — собираем полный плейлист для перемотки в плеере
       var indices = [];
       // Kodik ограничивает параллельные запросы к резолверу, поэтому для него
-      // загружаем только выбранную серию. Остальные плееры сохраняют плейлист.
+      // выбранную и следующую серии загружаем последовательно.
       if (player.kind !== 'kodik' && eps.length <= 30) { for (var i = 0; i < eps.length; i++) indices.push(i); }
-      else indices.push(idx);
+      else {
+        indices.push(idx);
+        if (player.kind === 'kodik' && idx + 1 < eps.length) indices.push(idx + 1);
+      }
 
       self._lastPlayError = null;
-      Promise.all(indices.map(buildOne)).then(function (items) {
+      var itemsPromise;
+      if (player.kind === 'kodik') {
+        itemsPromise = Promise.resolve([]);
+        indices.forEach(function (episodeIndex) {
+          itemsPromise = itemsPromise.then(function (items) {
+            return buildOne(episodeIndex).then(function (item) {
+              items.push(item);
+              return items;
+            });
+          });
+        });
+      } else {
+        itemsPromise = Promise.all(indices.map(buildOne));
+      }
+
+      itemsPromise.then(function (items) {
         Lampa.Loading.stop();
         var playlist = items.filter(Boolean);
         var current = items[indices.indexOf(idx)];
@@ -1111,6 +1234,7 @@ this.play = function (idx) {
         } catch (e) {
           console.log('AnimeJoy', 'history error:', e.message);
         }
+        savePlaybackFor(movie, state.title, player, eps[idx]);
         Lampa.Player.play(current);
         if (playlist.length > 1) Lampa.Player.playlist(playlist);
       });
