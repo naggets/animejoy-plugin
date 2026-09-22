@@ -10,7 +10,7 @@
   window.animejoy_plugin_loaded = true;
 
   var PLUGIN_TITLE = 'AnimeJoy';
-  var PLUGIN_VERSION = '1.7.0';
+  var PLUGIN_VERSION = '1.8.0';
   var DEFAULT_DOMAIN = 'https://animejoya.ru';
 
   // безопасный доступ к хранилищу (совместимость со старыми сборками Lampa)
@@ -70,10 +70,16 @@
     return storageMap('animejoy_title_choices')[movieKey(movie)] || null;
   }
 
-  function saveTitleFor(movie, title) {
+  function saveTitleFor(movie, title, manual) {
     if (!title || !title.id || !title.url) return;
     var choices = storageMap('animejoy_title_choices');
-    choices[movieKey(movie)] = { id: title.id, url: title.url, title: title.title };
+    var previous = choices[movieKey(movie)];
+    choices[movieKey(movie)] = {
+      id: title.id,
+      url: title.url,
+      title: title.title,
+      manual: Boolean(manual || (previous && previous.manual && String(previous.id) === String(title.id)))
+    };
     storageSetMap('animejoy_title_choices', choices);
   }
 
@@ -92,7 +98,7 @@
       episode: episode.name
     };
     storageSetMap('animejoy_last_playback', playback);
-    saveTitleFor(movie, title);
+    saveTitleFor(movie, title, false);
   }
 
   /* ============================ НАСТРОЙКИ ============================ */
@@ -984,7 +990,7 @@
       ensureAuth()
         .then(function () { return findTitle(movie); })
         .then(function (titles) {
-          if (savedTitle) {
+          if (savedTitle && (savedTitle.manual || !titles.length)) {
             titles = titles.filter(function (title) { return String(title.id) !== String(savedTitle.id); });
             titles.unshift(savedTitle);
           }
@@ -1158,7 +1164,7 @@ this.renderList = function () {
           rankSearchResults(list, query, 0);
           state.titles = list;
           state.title = list[0];
-          saveTitleFor(movie, state.title);
+          saveTitleFor(movie, state.title, true);
           self.loadTitle();
         }).catch(function (e) {
           self.activity.loader(false);
@@ -1189,7 +1195,7 @@ this.renderList = function () {
         }),
         onSelect: function (item) {
           state.title = state.titles[item.index];
-          saveTitleFor(movie, state.title);
+          saveTitleFor(movie, state.title, true);
           self.loadTitle();
         },
         onBack: function () { Lampa.Controller.toggle('content'); }
