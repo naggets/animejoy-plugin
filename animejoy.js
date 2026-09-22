@@ -36,11 +36,19 @@
 
   /* ============================ СЕТЬ ============================ */
 
+  function proxyPrefix() { return (Lampa.Storage.get('animejoy_proxy') || '').trim(); }
+
+  function wrapUrl(url) {
+    var p = proxyPrefix();
+    if (!p) return url;
+    return p + encodeURIComponent(url);
+  }
+
   function request(url, opts) {
     opts = opts || {};
     return new Promise(function (resolve, reject) {
       $.ajax({
-        url: url,
+        url: wrapUrl(url),
         method: opts.method || 'GET',
         data: opts.data,
         timeout: 20000,
@@ -48,7 +56,13 @@
         headers: opts.headers || {},
         xhrFields: { withCredentials: true },
         success: function (data, status, xhr) { resolve({ data: data, xhr: xhr }); },
-        error: function (xhr, status) { reject(new Error('HTTP ' + (xhr && xhr.status ? xhr.status : status))); }
+        error: function (xhr, status) {
+          var code = xhr && xhr.status;
+          var msg;
+          if (!code) msg = 'Сетевая ошибка (CORS или нет соединения). В браузере на lampa.mx задайте CORS-прокси в настройках плагина; в приложении Lampa на ТВ прокси не нужен';
+          else msg = 'HTTP ' + code;
+          reject(new Error(msg));
+        }
       });
     });
   }
@@ -677,6 +691,12 @@
       param: { name: 'animejoy_password', type: 'input', values: '', default: '', placeholder: 'Пароль' },
       field: { name: 'Пароль', description: 'Пароль от animejoya.ru' },
       onChange: resetAuth
+    });
+
+    Lampa.SettingsApi.addParam({
+      component: 'animejoy',
+      param: { name: 'animejoy_proxy', type: 'input', values: '', default: '', placeholder: 'https://corsproxy.io/?url=' },
+      field: { name: 'CORS-прокси', description: 'Нужен только в браузере (lampa.mx). Пример: https://corsproxy.io/?url=  В приложении на ТВ оставьте пустым' }
     });
 
     Lampa.SettingsApi.addParam({
