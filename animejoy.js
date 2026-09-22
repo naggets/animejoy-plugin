@@ -46,7 +46,7 @@
 
   function playerPriority() {
     var p = storageGet('animejoy_player', 'cda');
-    var all = [p, 'cda', 'allvideo', 'sibnet'];
+    var all = [p, 'cda', 'allvideo', 'sibnet', 'kodik'];
     return all.filter(function (v, i) { return all.indexOf(v) === i; });
   }
 
@@ -284,8 +284,12 @@
   function rankSearchResults(list, query, wantSeason) {
     return (list || []).map(function (item) {
       item._score = scoreResult(item, query, wantSeason);
+      item._exact = normTitle(item.title) === normTitle(query);
       return item;
     }).sort(function (x, y) {
+      // Полное совпадение всегда выше продолжений, OVA и фильмов — независимо
+      // от порядка, в котором DLE вернул результаты.
+      if (x._exact !== y._exact) return x._exact ? -1 : 1;
       if (y._score !== x._score) return y._score - x._score;
       var xe = episodeProgress(x.title);
       var ye = episodeProgress(y.title);
@@ -492,6 +496,187 @@
     });
   }
 
+  // ---- Kodik: страница сериала -> ID серий -> /ftor -> HLS ----
+  function attrValue(tag, name) {
+    var re = new RegExp('(?:^|\\s)' + name + '\\s*=\\s*["\\\']([^"\\\']*)["\\\']', 'i');
+    var m = re.exec(tag || '');
+    return m ? m[1] : '';
+  }
+
+  function kodikOrigin(url) {
+    var m = /^(https?:\/\/[^/]+)/i.exec(url || '');
+    return m ? m[1] : 'https://kodikplayer.com';
+  }
+
+  function parseKodikPage(html, embedUrl, endpoint) {
+    html = String(html || '');
+    var paramsMatch = /var\s+urlParams\s*=\s*'([^']+)'/i.exec(html);
+    var params = {};
+    if (paramsMatch) {
+      try { params = JSON.parse(paramsMatch[1]); } catch (e) {}
+    }
+    if (!params.d_sign || !params.pd_sign || !params.ref_sign) {
+      throw new Error('Kodik: не удалось получить параметры сессии');
+    }
+
+    var episodes = [];
+    var seen = {};
+    var sourceAt = html.search(/class=["'][^"']*series-options/i);
+    var source = sourceAt >= 0 ? html.slice(sourceAt) : html;
+    var tokenRe = /<div[^>]+class=["'][^"']*season-(\d+)[^"']*["'][^>]*>|<option\b[^>]*>/gi;
+    var token;
+    var season = 0;
+    while ((token = tokenRe.exec(source))) {
+      if (token[1]) {
+        season = parseInt(token[1], 10) || 0;
+        continue;
+      }
+      var tag = token[0];
+      var id = attrValue(tag, 'data-id');
+      var hash = attrValue(tag, 'data-hash');
+      if (!id || !hash || seen[id]) continue;
+      seen[id] = true;
+      episodes.push({
+        id: id,
+        hash: hash,
+        season: season,
+        name: attrValue(tag, 'data-title') || ('Серия ' + (episodes.length + 1))
+      });
+    }
+
+    // Фильмы и некоторые старые embed не содержат списка серий.
+    if (!episodes.length) {
+      var idMatch = /vInfo\.id\s*=\s*['"](\d+)['"]/i.exec(html);
+      var hashMatch = /vInfo\.hash\s*=\s*['"]([^'"]+)['"]/i.exec(html);
+      if (idMatch && hashMatch) {
+        episodes.push({ id: idMatch[1], hash: hashMatch[1], season: 0, name: 'Видео' });
+      }
+    }
+    if (!episodes.length) throw new Error('Kodik: список серий не найден');
+
+    var seasons = {};
+    episodes.forEach(function (ep) { if (ep.season) seasons[ep.season] = true; });
+    var manySeasons = Object.keys(seasons).length > 1;
+    var origin = kodikOrigin(embedUrl);
+    var context = {
+      endpoint: /^https?:\/\//i.test(endpoint || '') ? endpoint : origin + (endpoint || '/ftor'),
+      params: params,
+      referer: embedUrl
+    };
+
+    return episodes.map(function (ep) {
+      return {
+        file: origin + '/seria/' + ep.id + '/' + ep.hash + '/720p',
+        name: (manySeasons ? ('Сезон ' + ep.season + ' · ') : '') + ep.name,
+        kodikId: ep.id,
+        kodikHash: ep.hash,
+        kodikContext: context
+      };
+    });
+  }
+
+  var kodikEndpointCache = {};
+
+  function discoverKodikEndpoint(html, embedUrl) {
+    var script = /<script[^>]+src=["']([^"']*\/assets\/js\/app\.(?:serial|video)[^"']+\.js)["']/i.exec(html || '');
+    if (!script) return Promise.resolve('/ftor');
+    var scriptUrl = script[1];
+    if (scriptUrl.indexOf('//') === 0) scriptUrl = 'https:' + scriptUrl;
+    else if (scriptUrl.charAt(0) === '/') scriptUrl = kodikOrigin(embedUrl) + scriptUrl;
+    if (kodikEndpointCache[scriptUrl]) return kodikEndpointCache[scriptUrl];
+
+    kodikEndpointCache[scriptUrl] = request(scriptUrl).then(function (res) {
+      var match = /url\s*:\s*atob\(["']([^"']+)["']\)/i.exec(String(res.data || ''));
+      if (!match) return '/ftor';
+      try { return window.atob(match[1]) || '/ftor'; } catch (e) { return '/ftor'; }
+    }).catch(function () { return '/ftor'; });
+    return kodikEndpointCache[scriptUrl];
+  }
+
+  function hydrateKodikPlayer(player) {
+    var embedUrl = player.episodes[0] && player.episodes[0].file;
+    if (!embedUrl) return Promise.resolve(player);
+    return request(embedUrl).then(function (res) {
+      var html = String(res.data || '');
+      return discoverKodikEndpoint(html, embedUrl).then(function (endpoint) {
+        player.episodes = parseKodikPage(html, embedUrl, endpoint);
+        player.supported = true;
+        return player;
+      });
+    }).catch(function (e) {
+      player.supported = false;
+      player.loadError = e.message || 'не удалось загрузить серии';
+      return player;
+    });
+  }
+
+  function hydrateKodikPlayers(players) {
+    return Promise.all((players || []).map(function (player) {
+      return player.kind === 'kodik' ? hydrateKodikPlayer(player) : Promise.resolve(player);
+    }));
+  }
+
+  function decodeKodikSource(source) {
+    var shifted = String(source || '').replace(/[a-zA-Z]/g, function (ch) {
+      var code = ch.charCodeAt(0) + 18;
+      var max = ch <= 'Z' ? 90 : 122;
+      return String.fromCharCode(code <= max ? code : code - 26);
+    });
+    try { return window.atob(shifted); } catch (e) { return ''; }
+  }
+
+  function extractKodik(entry) {
+    var context = entry.kodikContext;
+    if (!context || !entry.kodikId || !entry.kodikHash) {
+      return Promise.reject(new Error('Kodik: данные серии не найдены'));
+    }
+    var data = {};
+    Object.keys(context.params || {}).forEach(function (key) { data[key] = context.params[key]; });
+    data.type = 'seria';
+    data.id = entry.kodikId;
+    data.hash = entry.kodikHash;
+    data.bad_user = false;
+    data.cdn_is_working = true;
+
+    function load() {
+      return request(context.endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        data: data
+      }).then(function (res) {
+        var parsed = parseMaybeJson(res.data);
+        if (!parsed || (!parsed.links && !parsed.link)) throw new Error('Kodik: пустой ответ');
+        return parsed;
+      });
+    }
+
+    function withRetry() {
+      return load().catch(function () {
+        // Kodik иногда ограничивает частые обращения к /ftor.
+        return new Promise(function (resolve) { setTimeout(resolve, 900); }).then(load);
+      });
+    }
+
+    return withRetry().then(function (json) {
+      var quality = {};
+      Object.keys(json.links || {}).forEach(function (key) {
+        var sources = json.links[key] || [];
+        if (!sources.length || !sources[0].src) return;
+        var src = sources[0].src;
+        if (src.indexOf('//') !== 0 && !/^https?:\/\//i.test(src)) src = decodeKodikSource(src);
+        if (src.indexOf('//') === 0) src = 'https:' + src;
+        if (src) quality[String(key).replace(/p$/i, '') + 'p'] = src;
+      });
+      var direct = json.link || '';
+      if (direct.indexOf('//') === 0) direct = 'https:' + direct;
+      if (!Object.keys(quality).length && !direct) throw new Error('Kodik: ссылки на видео не найдены');
+      return { url: direct || null, quality: quality };
+    });
+  }
+
   function pickQuality(quality) {
     var keys = Object.keys(quality || {});
     if (!keys.length) return null;
@@ -513,7 +698,7 @@
     if (kind === 'cda') return extractCda(entry.file);
     if (kind === 'allvideo') return extractAllVideo(entry.file);
     if (kind === 'sibnet') return extractSibnet(entry.file);
-    if (kind === 'kodik') return Promise.reject(new Error('Kodik пока не поддерживается — выберите другой плеер (CDA/AllVideo/Sibnet)'));
+    if (kind === 'kodik') return extractKodik(entry);
     return Promise.reject(new Error('Неизвестный плеер'));
   }
 
@@ -602,7 +787,7 @@
         name: name,
         kind: kind,
         episodes: eps,
-        supported: kind !== 'kodik' && kind !== 'other'
+        supported: kind !== 'other'
       });
     });
 
@@ -661,7 +846,10 @@
       return getTitleInfo(state.title.url)
         .then(getPlaylist)
         .then(function (pl) {
-          state.players = self.buildPlayers(pl);
+          return hydrateKodikPlayers(self.buildPlayers(pl));
+        })
+        .then(function (players) {
+          state.players = players;
           if (!state.players.length) throw new Error('В плейлисте нет серий');
           state.playerIdx = self.defaultPlayerIdx();
           self.renderList();
@@ -700,7 +888,7 @@
 this.renderList = function () {
       var self = this;
       var player = state.players[state.playerIdx];
-      var unsupported = (player.kind === 'kodik' || player.kind === 'other') ? ' — не поддерживается' : '';
+      var unsupported = !player.supported ? ' — ' + (player.loadError || 'не поддерживается') : '';
 
       scroll.render().find('.empty').remove();
       scroll.clear();
@@ -758,8 +946,7 @@ this.renderList = function () {
             Lampa.Noty.show('По запросу «' + query + '» ничего не найдено');
             return;
           }
-          list.forEach(function (it) { it._score = scoreResult(it, query, 0); });
-          list.sort(function (x, y) { return y._score - x._score; });
+          rankSearchResults(list, query, 0);
           state.titles = list;
           state.title = list[0];
           self.loadTitle();
@@ -803,7 +990,7 @@ this.renderList = function () {
       Lampa.Select.show({
         title: 'Выберите плеер',
         items: state.players.map(function (p, i) {
-          var extra = (p.kind === 'kodik' || p.kind === 'other') ? ' — не поддерживается' : '';
+          var extra = !p.supported ? ' — ' + (p.loadError || 'не поддерживается') : '';
           return { title: p.name + extra, selected: i === state.playerIdx, index: i };
         }),
         onSelect: function (item) {
@@ -818,8 +1005,8 @@ this.play = function (idx) {
       var player = state.players[state.playerIdx];
       var eps = player.episodes;
 
-      if (player.kind === 'kodik' || player.kind === 'other') {
-        Lampa.Noty.show('Этот плеер пока не поддерживается, выберите другой');
+      if (!player.supported) {
+        Lampa.Noty.show(player.loadError || 'Этот плеер не поддерживается');
         return;
       }
 
@@ -830,7 +1017,13 @@ this.play = function (idx) {
 
       var buildOne = function (i) {
         var ep = eps[i];
-        return streamFromEntry({ kind: player.kind, file: ep.file }).then(function (r) {
+        return streamFromEntry({
+          kind: player.kind,
+          file: ep.file,
+          kodikId: ep.kodikId,
+          kodikHash: ep.kodikHash,
+          kodikContext: ep.kodikContext
+        }).then(function (r) {
           var url = r.url || pickQuality(r.quality);
           if (!url) throw new Error('no url');
           return {
@@ -839,20 +1032,26 @@ this.play = function (idx) {
             quality: (r.quality && Object.keys(r.quality).length > 1) ? r.quality : undefined,
             timeline: Lampa.Timeline.view(self.episodeHash(ep))
           };
-        }).catch(function () { return null; });
+        }).catch(function (e) {
+          if (!self._lastPlayError) self._lastPlayError = e;
+          return null;
+        });
       };
 
       // если серий немного — собираем полный плейлист для перемотки в плеере
       var indices = [];
-      if (eps.length <= 30) { for (var i = 0; i < eps.length; i++) indices.push(i); }
+      // Kodik ограничивает параллельные запросы к резолверу, поэтому для него
+      // загружаем только выбранную серию. Остальные плееры сохраняют плейлист.
+      if (player.kind !== 'kodik' && eps.length <= 30) { for (var i = 0; i < eps.length; i++) indices.push(i); }
       else indices.push(idx);
 
+      self._lastPlayError = null;
       Promise.all(indices.map(buildOne)).then(function (items) {
         Lampa.Loading.stop();
         var playlist = items.filter(Boolean);
         var current = items[indices.indexOf(idx)];
         if (!current) {
-          Lampa.Noty.show('Не удалось получить ссылку на видео');
+          Lampa.Noty.show(self._lastPlayError ? self._lastPlayError.message : 'Не удалось получить ссылку на видео');
           return;
         }
         Lampa.Player.play(current);
@@ -1006,7 +1205,7 @@ this.play = function (idx) {
       component: 'animejoy',
       param: {
         name: 'animejoy_player', type: 'select', default: 'cda',
-        values: { auto: 'Авто', cda: 'CDA', allvideo: 'AllVideo', sibnet: 'Sibnet' }
+        values: { auto: 'Авто', cda: 'CDA', allvideo: 'AllVideo', sibnet: 'Sibnet', kodik: 'Kodik' }
       },
       field: { name: 'Приоритет плеера', description: 'Какой плеер выбирать по умолчанию (Sibnet может требовать РФ-IP)' }
     });
@@ -1098,6 +1297,8 @@ this.play = function (idx) {
     scoreResult: scoreResult,
     episodeProgress: episodeProgress,
     rankSearchResults: rankSearchResults,
+    parseKodikPage: parseKodikPage,
+    decodeKodikSource: decodeKodikSource,
     buildPlayersFromPlaylist: buildPlayersFromPlaylist
   };
 

@@ -19,7 +19,9 @@ function fixture(name) {
 }
 
 // --- Стабы окружения Lampa ---
-global.window = {};
+global.window = {
+  atob: value => Buffer.from(value, 'base64').toString('binary')
+};
 global.Navigator = { canmove: () => false, move: () => {} };
 global.document = {
   createElement: () => ({ appendChild: () => {}, type: '' }),
@@ -127,8 +129,8 @@ check('2-й сезон выигрывает у 1-го при поиске 2-го
 console.log('== buildPlayersFromPlaylist ==');
 const bp = dbg.buildPlayersFromPlaylist(pl);
 check('4 плеера в реальном плейлисте (ничего не теряется)', bp.length === 4);
-check('поддерживаемые (CDA/AllVideo/Sibnet) идут первыми', bp[0].kind !== 'kodik' && bp[0].supported === true);
-check('Kodik помечен как неподдерживаемый', bp.some(p => p.kind === 'kodik' && p.supported === false));
+check('все известные плееры помечены поддерживаемыми', bp.every(p => p.supported === true));
+check('Kodik доступен для последующей загрузки серий', bp.some(p => p.kind === 'kodik' && p.supported === true));
 check('имена плееров осмысленные (CDA/Sibnet/AllVideo/Kodik)', bp.every(p => /^(CDA|Sibnet|AllVideo|Kodik)$/.test(p.name)));
 const cdaPlayer = bp.find(p => p.kind === 'cda');
 check('CDA: 13 серий и первая = «1 серия»', cdaPlayer && cdaPlayer.episodes.length === 13 && cdaPlayer.episodes[0].name === '1 серия');
@@ -145,7 +147,7 @@ const multi = dbg.buildPlayersFromPlaylist({
 });
 check('две группы -> отдельные плееры с префиксом группы', multi.length === 3 &&
   multi.some(p => p.name === 'AL · Sibnet') && multi.some(p => p.name === 'AniLibria · Sibnet'));
-check('в мультигруппе Kodik не выброшен, но последний', multi[multi.length - 1].kind === 'kodik');
+check('в мультигруппе Kodik не выброшен', multi.some(p => p.kind === 'kodik'));
 
 // синтетика: dataId без разделителей не роняет парсер
 const single = dbg.buildPlayersFromPlaylist({
@@ -194,6 +196,42 @@ const complete = dbg.episodeProgress('Наруто [220 из 220]');
 const ongoing = dbg.episodeProgress('Боруто [280 из 300]');
 check('полный счётчик серий распознан', complete.complete && complete.total === 220);
 check('незавершённый счётчик не считается полным', !ongoing.complete && ongoing.total === 300);
+
+// ---------- 11. Kodik: список серий и декодирование потоков ----------
+console.log('== Kodik ==');
+const kodikHtml = `
+<script>
+  var urlParams = '{"d":"kodikplayer.com","d_sign":"ds","pd":"kodikplayer.com","pd_sign":"pds","ref":"","ref_sign":"rs"}';
+</script>
+<div class="series-options">
+  <div class="season-1">
+    <option value="1" data-id="101" data-hash="hash101" data-title="1 серия">1 серия</option>
+    <option value="2" data-id="102" data-hash="hash102" data-title="2 серия">2 серия</option>
+  </div>
+  <div class="season-2">
+    <option value="1" data-id="201" data-hash="hash201" data-title="1 серия">1 серия</option>
+  </div>
+</div>`;
+const kodikEpisodes = dbg.parseKodikPage(
+  kodikHtml,
+  'https://kodikplayer.com/serial/10/serialhash/720p',
+  '/ftor'
+);
+check('Kodik: разобраны серии всех сезонов', kodikEpisodes.length === 3);
+check('Kodik: сезоны различимы в названии', kodikEpisodes[2].name === 'Сезон 2 · 1 серия');
+check('Kodik: серия содержит ID и hash', kodikEpisodes[0].kodikId === '101' && kodikEpisodes[0].kodikHash === 'hash101');
+check('Kodik: endpoint приведён к абсолютному URL', kodikEpisodes[0].kodikContext.endpoint === 'https://kodikplayer.com/ftor');
+
+function encodeKodikSource(value) {
+  return Buffer.from(value).toString('base64').replace(/[a-zA-Z]/g, ch => {
+    let code = ch.charCodeAt(0) - 18;
+    const min = ch <= 'Z' ? 65 : 97;
+    if (code < min) code += 26;
+    return String.fromCharCode(code);
+  });
+}
+const hls = 'https://cloud.kodik-storage.com/video/720.mp4:hls:manifest.m3u8';
+check('Kodik: зашифрованный HLS декодируется', dbg.decodeKodikSource(encodeKodikSource(hls)) === hls);
 
 console.log('\nИтого: ' + passed + ' OK, ' + failed + ' FAIL');
 process.exit(failed ? 1 : 0);
