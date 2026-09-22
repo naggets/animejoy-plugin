@@ -14,14 +14,15 @@
 
   // безопасный доступ к хранилищу (совместимость со старыми сборками Lampa)
   function storageGet(key, def) {
+    var v;
     try {
-      if (Lampa.Storage && typeof Lampa.Storage.get === 'function') return Lampa.Storage.get(key, def);
-    } catch (e) {}
-    try {
-      var v = localStorage.getItem(key);
-      return v === null ? def : v;
-    } catch (e) {}
-    return def;
+      if (Lampa.Storage && typeof Lampa.Storage.get === 'function') v = Lampa.Storage.get(key, def);
+      else v = localStorage.getItem(key);
+    } catch (e) {
+      v = def;
+    }
+    if (v === null || v === undefined) return def;
+    return typeof v === 'string' ? v : String(v);
   }
 
   function storageSet(key, val) {
