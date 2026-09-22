@@ -168,5 +168,32 @@ const scoreExact = dbg.scoreResult({ title: homoglyphTitle }, 'расхитит�
 check('точный производный запрос даёт высокий балл', scoreExact >= 50);
 check('постороннее аниме не проходит порог', dbg.scoreResult({ title: 'Ван-Пис (1101+) [1179 из ХХ] One Piece' }, 'Великий расхититель гробниц', 0) < 25);
 
+// ---------- 10. Длинные сериалы: полная запись выше отдельных частей ----------
+console.log('== ранжирование полных сериалов ==');
+const shippuden = dbg.rankSearchResults([
+  { id: '5', title: 'Наруто: Ураганные хроники 5 — Кровавая тюрьма' },
+  { id: '6', title: 'Наруто: Ураганные хроники 6 — Путь ниндзя' },
+  { id: 'movie', title: 'Наруто: Ураганные хроники — Фильм [1 из 1]' },
+  { id: 'main', title: 'Наруто: Ураганные хроники [500 из 500]' }
+], 'Наруто: Ураганные хроники', 0);
+check('Shippuden: полные 500 серий идут первыми', shippuden[0] && shippuden[0].id === 'main');
+check('Shippuden: отдельная часть получает штраф', dbg.scoreResult(
+  { title: 'Наруто: Ураганные хроники часть 5' },
+  'Наруто: Ураганные хроники',
+  0
+) <= 40);
+
+const naruto = dbg.rankSearchResults([
+  { id: 'ova', title: 'Наруто OVA [9 из 9]' },
+  { id: 'shippuden', title: 'Наруто: Ураганные хроники [500 из 500]' },
+  { id: 'main', title: 'Наруто [220 из 220]' }
+], 'Наруто', 0);
+check('Naruto: оригинальные 220 серий идут первыми', naruto[0] && naruto[0].id === 'main');
+
+const complete = dbg.episodeProgress('Наруто [220 из 220]');
+const ongoing = dbg.episodeProgress('Боруто [280 из 300]');
+check('полный счётчик серий распознан', complete.complete && complete.total === 220);
+check('незавершённый счётчик не считается полным', !ongoing.complete && ongoing.total === 300);
+
 console.log('\nИтого: ' + passed + ' OK, ' + failed + ' FAIL');
 process.exit(failed ? 1 : 0);

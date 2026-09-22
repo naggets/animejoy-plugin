@@ -182,8 +182,13 @@
     return 0;
   }
 
-  function searchSite(query) {
-    var body = 'do=search&subaction=search&search_start=0&full_search=0&result_from=1&story=' + encodeURIComponent(query);
+  function searchSitePage(query, page) {
+    // В DLE первая страница имеет search_start=0, следующие — 2, 3, ...
+    // result_from — порядковый номер первого результата на странице.
+    var searchStart = page === 1 ? 0 : page;
+    var resultFrom = (page - 1) * 10 + 1;
+    var body = 'do=search&subaction=search&search_start=' + searchStart +
+      '&full_search=0&result_from=' + resultFrom + '&story=' + encodeURIComponent(query);
     return request(domain() + '/index.php?do=search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
@@ -191,6 +196,33 @@
     }).then(function (res) {
       return parseSearchResults(res.data);
     });
+  }
+
+  function searchSite(query) {
+    var all = [];
+    var seen = {};
+    var page = 1;
+    var maxPages = 6;
+
+    function next() {
+      return searchSitePage(query, page).then(function (list) {
+        var added = 0;
+        list.forEach(function (item) {
+          if (seen[item.id]) return;
+          seen[item.id] = true;
+          all.push(item);
+          added++;
+        });
+
+        // Некоторые сборки DLE игнорируют неверную пагинацию и снова отдают
+        // первую страницу. Остановка по отсутствию новых ID защищает от цикла.
+        if (!list.length || !added || page >= maxPages) return all;
+        page++;
+        return next();
+      });
+    }
+
+    return next();
   }
 
   function parseSearchResults(html) {
@@ -228,7 +260,38 @@
     }
     var s = seasonOf(item.title);
     if (wantSeason && s) score += (s === wantSeason) ? 25 : -25;
+
+    // Отдельные «части» длинных сериалов не должны вытеснять основную запись.
+    // Если пользователь сам искал конкретную часть, штраф не применяется.
+    var partPattern = /(?:^|[\s:—-])част[ьи]\s*\d+(?:\s|$)/i;
+    if (partPattern.test(item.title) && !partPattern.test(query)) score -= 30;
+
+    // Завершённая полная запись полезнее обрезанных и ещё выходящих вариантов.
+    // Бонус намеренно небольшой: близость названия остаётся главным сигналом.
+    var episodes = episodeProgress(item.title);
+    if (episodes.complete) score += Math.min(12, Math.round(Math.log(episodes.total + 1) * 2));
     return score;
+  }
+
+  function episodeProgress(title) {
+    var m = /\[\s*(\d+)\s+из\s+(\d+)\s*\]/i.exec(title || '');
+    if (!m) return { current: 0, total: 0, complete: false };
+    var current = parseInt(m[1], 10) || 0;
+    var total = parseInt(m[2], 10) || 0;
+    return { current: current, total: total, complete: total > 0 && current === total };
+  }
+
+  function rankSearchResults(list, query, wantSeason) {
+    return (list || []).map(function (item) {
+      item._score = scoreResult(item, query, wantSeason);
+      return item;
+    }).sort(function (x, y) {
+      if (y._score !== x._score) return y._score - x._score;
+      var xe = episodeProgress(x.title);
+      var ye = episodeProgress(y.title);
+      if (ye.complete !== xe.complete) return ye.complete ? 1 : -1;
+      return ye.total - xe.total;
+    });
   }
 
   // Альтернативные названия через Shikimori (russian / romaji / синонимы)
@@ -284,8 +347,7 @@
     function searchWith(query) {
       return searchSite(query).then(function (list) {
         if (!list.length) return [];
-        list.forEach(function (it) { it._score = scoreResult(it, query, wantSeason); });
-        list.sort(function (x, y) { return y._score - x._score; });
+        rankSearchResults(list, query, wantSeason);
         var good = list.filter(function (it) { return it._score >= 25; });
         if (!good.length && !fallback.length) fallback = list.slice(0, 5);
         return good;
@@ -1034,6 +1096,8 @@ this.play = function (idx) {
     derivedQueries: derivedQueries,
     seasonOf: seasonOf,
     scoreResult: scoreResult,
+    episodeProgress: episodeProgress,
+    rankSearchResults: rankSearchResults,
     buildPlayersFromPlaylist: buildPlayersFromPlaylist
   };
 
