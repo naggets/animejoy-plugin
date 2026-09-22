@@ -767,7 +767,7 @@
       if (!render || !render.length || render.find('.view--animejoy').length) return;
       if (!e.data || !e.data.movie) return;
 
-      var btn = $('<div class="full-start__button selector view--animejoy view--animejoy">' + ICON_SVG + '<span>' + PLUGIN_TITLE + '</span></div>');
+      var btn = $('<div class="full-start__button selector view--animejoy" data-subtitle="Субтитры с animejoya.ru">' + ICON_SVG + '<span>' + PLUGIN_TITLE + '</span></div>');
       btn.on('hover:enter', function () {
         Lampa.Activity.push({
           url: '',
